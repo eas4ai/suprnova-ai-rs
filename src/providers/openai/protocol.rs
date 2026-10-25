@@ -617,6 +617,13 @@ pub(crate) fn wire_request(
             }
         }
     }
+    // The `mistral` entry settles the schema's strictness or turns it into
+    // JSON mode with the schema instruction (HST-042).
+    if let Some(profile) = chat
+        && profile.dialect == Dialect::Mistral
+    {
+        super::mistral::Options::parse(&p)?.output(options.output_schema.as_ref(), &mut body)?;
+    }
     if let (Some(profile), Some(entry)) = (chat, &host_entry) {
         entry.apply(profile, &mut body);
     }

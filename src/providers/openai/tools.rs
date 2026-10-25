@@ -4,7 +4,7 @@ use super::{
     capabilities::{Capabilities, dropped},
     dialect,
     params::invalid,
-    profile::ResponsesDialect,
+    profile::{Dialect, ResponsesDialect},
     protocol::Wire,
 };
 use crate::{
@@ -351,7 +351,11 @@ pub(super) fn convert(tools: &[Tool], wire: Wire, model: &str) -> Result<Vec<Val
                     }
                     let parameters = dialect::tool_parameters(profile, parameters)?;
                     let mut function = json!({"name":tool.name,"description":spec.description.as_deref().unwrap_or(""),"parameters":parameters});
-                    if profile.openai_own && tool.is_strict() {
+                    // OpenAI and Mistral take strict function tools
+                    // (HST-042); DeepSeek's go through `strict_tools`.
+                    if (profile.openai_own || profile.dialect == Dialect::Mistral)
+                        && tool.is_strict()
+                    {
                         function["strict"] = json!(true);
                     }
                     result.push(json!({"type":"function","function":function}));

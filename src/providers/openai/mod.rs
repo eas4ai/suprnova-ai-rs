@@ -69,6 +69,7 @@ mod files;
 mod host_options;
 mod images;
 mod messages;
+mod mistral;
 mod options;
 pub mod params;
 pub(crate) mod profile;

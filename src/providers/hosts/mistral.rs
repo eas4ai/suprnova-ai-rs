@@ -7,8 +7,14 @@
 //! `tools`. An output schema goes out unchanged with `strict: false`.
 //! Reasoning history goes out as thinking chunks of the assistant content, a
 //! final assistant message as a prefix to continue, and PDFs as document URLs;
-//! other non-image files fail. Mistral-only fields, such as `safe_prompt`, go
-//! in `InferenceRequestParams::extra_body`.
+//! other non-image files fail. The `mistral` options entry (`safePrompt`,
+//! `documentImageLimit`, `documentPageLimit`, `promptCacheKey`,
+//! `parallelToolCalls`, `reasoningEffort`, `structuredOutputs`,
+//! `strictJsonSchema`) wins over the core settings it names; with
+//! `structuredOutputs: false`, an output schema goes out as JSON mode with the
+//! schema instruction in the first system message, and `strictJsonSchema`
+//! sets the `strict` of the JSON schema format. A strict function tool goes
+//! out with `strict: true`.
 use super::{Host, HostProtocol, HostProvider, Models};
 use crate::{
     Error, ProviderConfig, ProviderRegistry,
