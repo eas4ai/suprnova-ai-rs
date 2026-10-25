@@ -188,6 +188,9 @@ pub(super) fn request(
             if let Some(Effort::Level(_)) = effort(p) {
                 body.insert("reasoning_effort".into(), json!("high"));
             }
+            // The `mistral` entry replaces the core settings it names
+            // (HST-042).
+            super::mistral::Options::parse(p)?.apply(body);
         }
     }
     Ok(())
@@ -505,7 +508,10 @@ const MISTRAL_NO_REASONING: [&str; 14] = [
 ];
 
 fn check_mistral(model: &str, p: &InferenceRequestParams) -> Result<(), Error> {
-    if MISTRAL_NO_REASONING.contains(&model) && effort(p).is_some() {
+    let options = super::mistral::Options::parse(p)?;
+    if MISTRAL_NO_REASONING.contains(&model)
+        && (effort(p).is_some() || options.reasoning_effort.is_some())
+    {
         return Err(invalid(format!(
             "Mistral model {model} does not take reasoning settings"
         )));
