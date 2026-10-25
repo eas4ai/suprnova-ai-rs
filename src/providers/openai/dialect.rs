@@ -115,7 +115,7 @@ fn xai_without_reasoning(model: &str) -> bool {
     matches!(rest, "-reasoning" | "-non-reasoning")
 }
 
-fn check_settings(
+pub(super) fn check_settings(
     label: &str,
     unsupported: &[Setting],
     p: &InferenceRequestParams,

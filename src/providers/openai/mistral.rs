@@ -93,13 +93,27 @@ impl Options {
 
     /// Whether an output schema goes out as a JSON schema, the default, or
     /// as JSON mode with the schema in the instruction.
-    fn structured_outputs(&self) -> bool {
+    pub(super) fn structured_outputs(&self) -> bool {
         self.structured_outputs.unwrap_or(true)
     }
 
     /// The `strict` of a JSON schema response format, false when unset.
-    fn strict(&self) -> bool {
+    pub(super) fn strict(&self) -> bool {
         self.strict_json_schema.unwrap_or(false)
+    }
+
+    /// The first option set that the Conversations API does not take
+    /// (HST-043), which its `getArgs` warns about.
+    pub(super) fn conversations_unsupported(&self) -> Option<&'static str> {
+        [
+            ("safePrompt", self.safe_prompt.is_some()),
+            ("documentImageLimit", self.document_image_limit.is_some()),
+            ("documentPageLimit", self.document_page_limit.is_some()),
+            ("promptCacheKey", self.prompt_cache_key.is_some()),
+            ("parallelToolCalls", self.parallel_tool_calls.is_some()),
+        ]
+        .into_iter()
+        .find_map(|(name, set)| set.then_some(name))
     }
 
     /// Put the options into the body over the core settings they replace.
@@ -146,10 +160,7 @@ impl Options {
             return Ok(());
         }
         body.insert("response_format".into(), json!({"type": "json_object"}));
-        let instruction = format!(
-            "JSON schema:\n{}\nYou MUST answer with a JSON object that matches the JSON schema above.",
-            serde_json::to_string(schema)?
-        );
+        let instruction = instruction(schema)?;
         let messages = body.entry("messages").or_insert_with(|| json!([]));
         let Some(messages) = messages.as_array_mut() else {
             return Ok(());
@@ -166,4 +177,14 @@ impl Options {
         }
         Ok(())
     }
+}
+
+/// The instruction JSON mode puts in the first system message
+/// (`injectJsonInstruction`): `JSON schema:`, the schema as compact JSON and
+/// the answer rule, each on its own line.
+pub(super) fn instruction(schema: &schemars::Schema) -> Result<String, Error> {
+    Ok(format!(
+        "JSON schema:\n{}\nYou MUST answer with a JSON object that matches the JSON schema above.",
+        serde_json::to_string(schema)?
+    ))
 }

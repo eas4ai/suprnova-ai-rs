@@ -15,6 +15,17 @@
 //! schema instruction in the first system message, and `strictJsonSchema`
 //! sets the `strict` of the JSON schema format. A strict function tool goes
 //! out with `strict: true`.
+//!
+//! [`conversations`] gives the Conversations API as a second protocol: `POST
+//! <base>/conversations` with the system messages as `instructions`, the
+//! history as `inputs`, the function tools and the [`web_search`] and
+//! [`web_search_premium`] tools, and the chat fields as `completion_args`.
+//! Its stream delivers text, reasoning, function calls and the searches
+//! Mistral runs as built-in tool parts, with the cited pages as `sources` in
+//! the final message's `mistral` metadata. It takes no `safePrompt`,
+//! document limits, `promptCacheKey` or `parallelToolCalls`, and reasons
+//! only on the models its TypeScript model lists; such a setting fails with
+//! `Error::Validation` before any request.
 use super::{Host, HostProtocol, HostProvider, Models};
 use crate::{
     Error, ProviderConfig, ProviderProtocol, ProviderRegistry,
