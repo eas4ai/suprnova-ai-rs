@@ -588,6 +588,9 @@ struct Reader {
     usage: Option<Value>,
     done: bool,
     has_function_call: bool,
+    /// Whether an event or a content part had a shape the reader does not
+    /// know; TypeScript's closed schemas make such a chunk an error.
+    malformed: bool,
 }
 
 impl Reader {
@@ -610,6 +613,7 @@ impl Reader {
             usage: None,
             done: false,
             has_function_call: false,
+            malformed: false,
         }
     }
 
@@ -701,7 +705,7 @@ impl Reader {
             "function.call.delta" => self.function_call(value),
             "tool.execution.started" | "tool.execution.delta" => self.execution(value),
             "tool.execution.done" => self.execution_done(value)?,
-            _ => {}
+            _ => self.malformed = true,
         }
         Ok(())
     }
@@ -718,7 +722,11 @@ impl Reader {
             value["content_index"].as_u64().unwrap_or(0)
         );
         match &value["content"] {
-            Value::String(text) if !text.is_empty() => self.content(&key, Kind::Text, text),
+            Value::String(text) => {
+                if !text.is_empty() {
+                    self.content(&key, Kind::Text, text);
+                }
+            }
             Value::Object(part) => match part.get("type").and_then(Value::as_str) {
                 Some("text") => {
                     if let Some(text) = part["text"].as_str().filter(|text| !text.is_empty()) {
@@ -748,9 +756,9 @@ impl Reader {
                         }));
                     }
                 }
-                _ => {}
+                _ => self.malformed = true,
             },
-            _ => {}
+            _ => self.malformed = true,
         }
     }
 
@@ -884,7 +892,7 @@ impl Reader {
                 tool_call_id: id,
             }));
         }
-        let finish = if !self.done || !self.executions.is_empty() {
+        let finish = if self.malformed || !self.done || !self.executions.is_empty() {
             "error"
         } else if self.has_function_call {
             "tool_call"
