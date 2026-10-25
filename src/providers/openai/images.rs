@@ -120,7 +120,7 @@ impl ImageOptions {
 
 /// The bytes and media type of an input, fetching a URL through the
 /// provider's download transport.
-pub(super) async fn media_bytes(
+pub(crate) async fn media_bytes(
     input: &MediaInput,
     provider: &dyn Provider,
     what: &str,
