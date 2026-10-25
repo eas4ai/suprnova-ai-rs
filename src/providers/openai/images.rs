@@ -125,10 +125,12 @@ pub(crate) async fn media_bytes(
     provider: &dyn Provider,
     what: &str,
 ) -> Result<(Vec<u8>, String), Error> {
+    // A host that reuses this names itself, not OpenAI (HST-047).
+    let label = crate::providers::hosts::chat_api(provider).map_or("OpenAI", |api| api.label);
     let download = |url: String| async move {
         let transport = provider.download_transport().ok_or_else(|| {
             invalid(format!(
-                "OpenAI takes {what} as bytes; build the provider with with_download_transport to fetch {url}"
+                "{label} takes {what} as bytes; build the provider with with_download_transport to fetch {url}"
             ))
         })?;
         let (bytes, media_type) = files::download(transport.as_ref(), &url, DEFAULT_MAX_BYTES)
