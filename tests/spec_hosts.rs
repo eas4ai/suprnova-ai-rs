@@ -26,6 +26,7 @@ use suprnova_ai::{
         },
         openai::{self, OpenAIChatCompletionsProtocol, OpenAICompatibleProvider},
     },
+    system_message,
     transport::{HttpRequest, HttpResponse, HttpTransport, TransportError},
     types::{
         Event, Message, MessageRole, Part, Tool, ToolChoice, ToolChoiceMode, ToolSelection,
@@ -6555,4 +6556,246 @@ async fn hst_038_a_null_minimax_entry_reads_nothing_and_copies_no_metadata() {
     let metadata = handle.message().provider_metadata.clone().unwrap();
     assert!(!metadata.contains_key("minimax"), "{metadata:?}");
     assert!(transport.body().get("output_config").is_none());
+}
+
+// HST-042 to HST-047: Mistral, whole.
+
+/// Options holding only a `mistral` entry.
+fn mistral_entry(value: Value) -> StreamOptions {
+    with_entry(StreamOptions::default(), "mistral", value)
+}
+/// The output schema of the Mistral tests, as the body carries it.
+fn answer_schema() -> Value {
+    json!({"type":"object","properties":{"a":{"type":"string"},"b":{"type":"integer"}},"required":["a"]})
+}
+fn with_output_schema(mut options: StreamOptions, schema: &Value) -> StreamOptions {
+    options.output_schema = Some(schema.clone().try_into().unwrap());
+    options.output_type_name = Some("answer".into());
+    options
+}
+
+#[tokio::test]
+async fn hst_042_mistral_sends_its_options_as_typescript_sends_them() {
+    let mut options = params(|p| {
+        p.cache = Some(CacheParams {
+            key: Some("core".into()),
+            ..Default::default()
+        });
+        p.tool_calling = Some(ToolCallingParams {
+            tool_choice: ToolChoice::Auto,
+            parallel_tool_calls: ProviderValue::Value(true),
+            max_tool_calls: ProviderValue::Default,
+        });
+    });
+    options.tools = tools(&["lookup"]);
+    let options = with_effort(
+        with_entry(
+            options,
+            "mistral",
+            json!({"safePrompt": true, "documentImageLimit": 4, "documentPageLimit": 16, "promptCacheKey": "k", "parallelToolCalls": false, "reasoningEffort": "none"}),
+        ),
+        Some("high"),
+    );
+    let body = host_body(
+        "mistral",
+        "mistral-small-latest",
+        vec![user_message("hello")],
+        options,
+    )
+    .await;
+    assert_eq!(body["safe_prompt"], true, "{body}");
+    assert_eq!(body["document_image_limit"], 4, "{body}");
+    assert_eq!(body["document_page_limit"], 16, "{body}");
+    // The entry's cache key and parallel tool calls replace the core ones.
+    assert_eq!(body["prompt_cache_key"], "k", "{body}");
+    assert_eq!(body["parallel_tool_calls"], false, "{body}");
+    // The entry's effort replaces the mapping of the core effort.
+    assert_eq!(body["reasoning_effort"], "none", "{body}");
+    for key in [
+        "safePrompt",
+        "documentImageLimit",
+        "documentPageLimit",
+        "promptCacheKey",
+        "parallelToolCalls",
+        "reasoningEffort",
+        "mistral",
+    ] {
+        assert!(body.get(key).is_none(), "{key} in {body}");
+    }
+    // Without tools, parallel tool calls stay out (HST-014).
+    let body = host_body(
+        "mistral",
+        "mistral-small-latest",
+        vec![user_message("hello")],
+        mistral_entry(json!({"parallelToolCalls": false, "reasoningEffort": "high"})),
+    )
+    .await;
+    assert!(body.get("parallel_tool_calls").is_none(), "{body}");
+    assert_eq!(body["reasoning_effort"], "high", "{body}");
+    assert!(body.get("safe_prompt").is_none(), "{body}");
+}
+
+#[tokio::test]
+async fn hst_042_strict_schemas_and_json_object_mode_follow_the_entry() {
+    let schema = answer_schema();
+    let body = host_body(
+        "mistral",
+        "mistral-small-latest",
+        vec![user_message("hello")],
+        with_output_schema(mistral_entry(json!({"strictJsonSchema": true})), &schema),
+    )
+    .await;
+    assert_eq!(
+        body["response_format"],
+        json!({"type": "json_schema", "json_schema": {"name": "answer", "strict": true, "schema": schema}}),
+        "{body}"
+    );
+    // JSON-object mode puts the instruction at the end of a first system
+    // message, after a blank line.
+    let instruction = format!(
+        "JSON schema:\n{}\nYou MUST answer with a JSON object that matches the JSON schema above.",
+        serde_json::to_string(&schema).unwrap()
+    );
+    let body = host_body(
+        "mistral",
+        "mistral-small-latest",
+        vec![system_message("S"), user_message("hello")],
+        with_output_schema(mistral_entry(json!({"structuredOutputs": false})), &schema),
+    )
+    .await;
+    assert_eq!(
+        body["response_format"],
+        json!({"type": "json_object"}),
+        "{body}"
+    );
+    let messages = body["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 2, "{body}");
+    assert_eq!(
+        messages[0],
+        json!({"role": "system", "content": format!("S\n\n{instruction}")}),
+        "{body}"
+    );
+    assert_eq!(messages[1]["role"], "user", "{body}");
+    // Or in a new first system message when the first message is not one.
+    let body = host_body(
+        "mistral",
+        "mistral-small-latest",
+        vec![user_message("hello"), system_message("later")],
+        with_output_schema(mistral_entry(json!({"structuredOutputs": false})), &schema),
+    )
+    .await;
+    let messages = body["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 3, "{body}");
+    assert_eq!(
+        messages[0],
+        json!({"role": "system", "content": instruction}),
+        "{body}"
+    );
+    assert_eq!(messages[1]["role"], "user", "{body}");
+    assert_eq!(
+        messages[2],
+        json!({"role": "system", "content": "later"}),
+        "{body}"
+    );
+    // Without the entry, the schema goes out as a JSON schema that is not
+    // strict, and the system message stays as it is (HST-014).
+    let body = host_body(
+        "mistral",
+        "mistral-small-latest",
+        vec![system_message("S"), user_message("hello")],
+        with_output_schema(StreamOptions::default(), &schema),
+    )
+    .await;
+    assert_eq!(
+        body["response_format"]["json_schema"]["strict"], false,
+        "{body}"
+    );
+    assert_eq!(body["messages"][0]["content"], "S", "{body}");
+}
+
+#[tokio::test]
+async fn hst_042_a_strict_tool_goes_out_with_strict_true() {
+    let body = host_body(
+        "mistral",
+        "mistral-small-latest",
+        vec![user_message("hello")],
+        with_tools(vec![lookup_tool().with_strict(true)]),
+    )
+    .await;
+    assert_eq!(body["tools"][0]["function"]["strict"], true, "{body}");
+    let body = host_body(
+        "mistral",
+        "mistral-small-latest",
+        vec![user_message("hello")],
+        with_tools(vec![lookup_tool()]),
+    )
+    .await;
+    assert!(
+        body["tools"][0]["function"].get("strict").is_none(),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn hst_042_invalid_mistral_entries_fail_before_a_request() {
+    for value in [
+        json!([]),
+        json!({"reasoningEffort": "medium"}),
+        json!({"safePrompt": "yes"}),
+        json!({"topK": 3}),
+        json!({"documentImageLimit": "4"}),
+        json!({"documentPageLimit": true}),
+        json!({"promptCacheKey": 1}),
+        json!({"parallelToolCalls": "no"}),
+        json!({"structuredOutputs": 1}),
+        json!({"strictJsonSchema": "no"}),
+    ] {
+        let message = validation(
+            "mistral",
+            "mistral-small-latest",
+            mistral_entry(value.clone()),
+        )
+        .await;
+        assert!(message.contains("mistral"), "{value}: {message}");
+    }
+    // A model without reasoning settings takes no effort from the entry
+    // either (HST-014).
+    let message = validation(
+        "mistral",
+        "mistral-large-latest",
+        mistral_entry(json!({"reasoningEffort": "high"})),
+    )
+    .await;
+    assert!(message.contains("mistral-large-latest"), "{message}");
+}
+
+#[tokio::test]
+async fn hst_042_cached_tokens_come_from_prompt_tokens_details() {
+    for (usage, cached) in [
+        (
+            json!({"prompt_tokens":3,"completion_tokens":4,"prompt_tokens_details":{"cached_tokens":4}}),
+            4,
+        ),
+        (
+            json!({"prompt_tokens":3,"completion_tokens":4,"num_cached_tokens":5,"prompt_tokens_details":{"cached_tokens":4}}),
+            5,
+        ),
+        (
+            json!({"prompt_tokens":3,"completion_tokens":4,"prompt_token_details":{"cached_tokens":6}}),
+            6,
+        ),
+    ] {
+        let transport = Recorder::new([chat_sse(&[
+            json!({"choices":[{"index":0,"delta":{"role":"assistant","content":"D"},"finish_reason":"stop"}],"usage":usage}),
+        ])]);
+        let mistral = model("mistral", "mistral-medium-latest", transport);
+        let (handle, events) =
+            call(&mistral, vec![user_message("hello")], Default::default()).await;
+        ok(&events);
+        assert_eq!(
+            handle.usage().unwrap().cache_read_tokens,
+            Some(cached),
+            "{usage}"
+        );
+    }
 }
