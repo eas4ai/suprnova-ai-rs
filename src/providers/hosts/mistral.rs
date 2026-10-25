@@ -17,14 +17,18 @@
 //! out with `strict: true`.
 use super::{Host, HostProtocol, HostProvider, Models};
 use crate::{
-    Error, ProviderConfig, ProviderRegistry,
+    Error, ProviderConfig, ProviderProtocol, ProviderRegistry,
     providers::{
         http::{ApiProfile, Auth},
-        openai::profile::{
-            ChatProfile, Dialect, HostOptions, JsonSchemaModels, ReasoningTokens, Setting,
+        openai::{
+            conversations::{self, ConversationsProtocol},
+            profile::{
+                ChatProfile, Dialect, HostOptions, JsonSchemaModels, ReasoningTokens, Setting,
+            },
         },
     },
     transport::HttpTransport,
+    types::Tool,
 };
 use std::sync::Arc;
 
@@ -81,12 +85,39 @@ pub fn provider(config: ProviderConfig, transport: Arc<dyn HttpTransport>) -> Ho
     HostProvider::new(&HOST, config, transport)
 }
 
+/// The Conversations API protocol (HST-043, HST-044), which a model takes
+/// through `Model::with_protocol`:
+/// `Model::new("mistral-medium-latest", provider).with_protocol(mistral::conversations())`.
+/// It sends `POST <base>/conversations` with the provider's key.
+pub fn conversations() -> Arc<dyn ProviderProtocol> {
+    Arc::new(ConversationsProtocol(&PROFILE))
+}
+
+/// The Conversations API's web search tool, `mistral.web_search`, which
+/// Mistral runs itself; its calls and results come back as built-in tool
+/// parts, and the pages it cites as `sources` in the final message's
+/// `mistral` metadata.
+pub fn web_search() -> Tool {
+    conversations::web_search_tool(conversations::WEB_SEARCH)
+}
+
+/// The Conversations API's web search over verified news too,
+/// `mistral.web_search_premium`.
+pub fn web_search_premium() -> Tool {
+    conversations::web_search_tool(conversations::WEB_SEARCH_PREMIUM)
+}
+
 /// Register the Mistral provider under `mistral` and `@ai-sdk/mistral`,
-/// with snapshot restoration that uses this transport.
+/// with snapshot restoration that uses this transport, for models on the
+/// chat protocol and on the Conversations protocol alike.
 pub fn register(
     registry: &mut ProviderRegistry,
     config: ProviderConfig,
     transport: Arc<dyn HttpTransport>,
 ) -> Result<(), Error> {
-    super::register(&HOST, registry, config, transport, None)
+    let mut next = registry.clone();
+    super::register(&HOST, &mut next, config, transport, None)?;
+    next.register_protocol_factory(conversations::CLASS_ID, |_| Ok(conversations()))?;
+    *registry = next;
+    Ok(())
 }

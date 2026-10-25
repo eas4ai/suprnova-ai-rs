@@ -60,6 +60,7 @@ mod batch;
 mod capabilities;
 mod chat;
 mod completions;
+pub(crate) mod conversations;
 mod decisions;
 mod deepseek;
 mod dialect;
