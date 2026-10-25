@@ -3,8 +3,8 @@
 //! on the compatible embedding protocol (HST-028) and their image models
 //! (HST-029 to HST-031), Together AI's reranking (HST-032), MiniMax's
 //! video model on its Messages protocol (HST-040, HST-041), and Mistral's
-//! embeddings (HST-045).
-use super::{Embeddings, Models, embeddings, images, rerank, video};
+//! embeddings and speech (HST-045, HST-046).
+use super::{Embeddings, Models, audio, embeddings, images, rerank, video};
 use crate::{
     Error, Model, Provider, ProviderProtocol, StreamOptions,
     providers::{
@@ -12,9 +12,9 @@ use crate::{
         anthropic::protocol::HostMessagesProtocol,
         openai::{OpenAIEmbeddingProtocol, protocol::HostChatProtocol},
         operations::{
-            CallLimits, Documents, EmbedParams, EvaluationInput, EvaluationParams, ImageParams,
-            ImagePrompt, Item, Question, RankedDocument, RerankParams, VideoParams, VideoPrompt,
-            VideoStatus,
+            AudioParams, AudioPrompt, CallLimits, Documents, EmbedParams, EvaluationInput,
+            EvaluationParams, ImageParams, ImagePrompt, Item, Question, RankedDocument,
+            RerankParams, VideoParams, VideoPrompt, VideoStatus,
         },
     },
     types::{
@@ -131,6 +131,18 @@ impl ProviderProtocol for HostModels {
             max_per_call: Some(1),
             parallel: true,
         }
+    }
+    async fn generate_audio(
+        &self,
+        model: &Model,
+        prompt: AudioPrompt,
+        params: AudioParams,
+        provider: &dyn Provider,
+    ) -> Result<Item<Vec<FilePart>>, Error> {
+        if !self.models.speech {
+            return Err(Error::UnsupportedOperation("generate_audio".into()));
+        }
+        audio::mistral_speech(&self.chat.0.api, model, prompt, params, provider).await
     }
 }
 

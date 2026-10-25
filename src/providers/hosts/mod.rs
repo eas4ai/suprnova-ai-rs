@@ -61,6 +61,7 @@ use crate::{
 use async_trait::async_trait;
 use std::{fmt, sync::Arc};
 
+mod audio;
 pub mod cerebras;
 pub mod deepinfra;
 pub mod deepseek;
@@ -169,6 +170,8 @@ pub(crate) struct Models {
     pub files: bool,
     /// MiniMax's video model (HST-040, HST-041).
     pub videos: Option<video::Videos>,
+    /// Mistral's speech model (HST-046).
+    pub speech: bool,
 }
 /// Whose embedding API a host serves.
 #[derive(Clone, Copy, Debug)]
@@ -187,10 +190,12 @@ impl Models {
         reranking: false,
         files: false,
         videos: None,
+        speech: false,
     };
-    /// Mistral's: the language model and embeddings.
+    /// Mistral's: the language model, embeddings and speech.
     pub(crate) const MISTRAL: Self = Self {
         embeddings: Some(Embeddings::Mistral),
+        speech: true,
         ..Self::CHAT
     };
     /// DeepSeek's: the language model and the files API.
@@ -207,25 +212,20 @@ impl Models {
     pub(crate) const DEEPINFRA: Self = Self {
         embeddings: Some(Embeddings::Compatible),
         images: Some(images::Images::DeepInfra),
-        reranking: false,
-        files: false,
-        videos: None,
+        ..Self::CHAT
     };
     /// Fireworks': embeddings and images.
     pub(crate) const FIREWORKS: Self = Self {
         embeddings: Some(Embeddings::Compatible),
         images: Some(images::Images::Fireworks),
-        reranking: false,
-        files: false,
-        videos: None,
+        ..Self::CHAT
     };
     /// Together AI's: embeddings, images and reranking.
     pub(crate) const TOGETHER_AI: Self = Self {
         embeddings: Some(Embeddings::Compatible),
         images: Some(images::Images::TogetherAI),
         reranking: true,
-        files: false,
-        videos: None,
+        ..Self::CHAT
     };
     /// Whether the host serves a model kind beside its language model.
     fn beside_chat(self) -> bool {
@@ -233,6 +233,7 @@ impl Models {
             || self.images.is_some()
             || self.reranking
             || self.videos.is_some()
+            || self.speech
     }
 }
 impl Host {
