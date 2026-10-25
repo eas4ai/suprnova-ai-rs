@@ -8,6 +8,8 @@ Moonshot AI, Together AI and Z.ai), the OpenAI Responses protocol (xAI and
 Hugging Face) and the Anthropic Messages protocol (MiniMax). Each one is the
 existing adapter with a host profile: its endpoint, its key, and the request
 and response differences the AI SDK for TypeScript 7.0.148 records for it.
+The other model kinds a host's package ships, and Mistral's Conversations
+API, which no other provider shares, are specified in the host's section.
 
 | Host | Name and handles | Default base URL | Key variable |
 |---|---|---|---|
@@ -742,4 +744,191 @@ MUST be the error's message. A MiniMax video model makes one video per call.
 Falsifier: A scripted job for a call with one first frame whose start returns `task_id: "t1"` and whose status is `running`, then `succeeded` with a `content.url` on another origin, `duration` 5, `ratio` `16:9`, `resolution` `2K` and `usage.total_seconds` 5, is checked at another URL or without the key, is reported other than pending then completed, fetches the URL with the key or not through the download transport, or completes with other `minimax` metadata than `{taskId: "t1", videoUrl: <the URL>, resolvedInputs: {imageCount: 1, referenceVideoUrls: []}, duration: 5, ratio: "16:9", resolution: "2K", usage: {totalSeconds: 5}}`; a `failed` task with error message `m` and code 7 does not fail with a message holding `m`, `7` and `t1`; a `cancelled` or `expired` task does not fail; a start response without `task_id` or a `succeeded` task without a URL gives another error kind; an HTTP 400 body `{"error": {"message": "bad"}}` gives another message; or `n` of 2 makes other than two jobs.
 Mechanism: hosts
 Rationale: `doStatus` and `doGenerate` in `minimax-video-model.ts`; TypeScript's core fetches a result URL without credentials, and its `pollIntervalMs` and `pollTimeoutMs` are `VideoOptions` here (OPS-004).
+Status: Agreed 2026-10-24
+
+## Mistral, whole
+
+The rest of `@ai-sdk/mistral` 4.0.69: the `mistral` options of its chat
+model, its Conversations API language model with the web search tools, and
+its embedding, speech and transcription models. Mistral's own options are
+the `mistral` entry in a call's provider params or an operation's provider
+options. `mistral::conversations()` gives the Conversations protocol, which
+a model takes through `Model::with_protocol`, as a model takes Google's
+Interactions protocol; `mistral::web_search()` and
+`mistral::web_search_premium()` give that API's provider-executed tools,
+with the ids `mistral.web_search` and `mistral.web_search_premium`. A speech
+call returns the warnings of TypeScript in `Item.warnings`, as the image and
+video calls of HST-029 to HST-031 and HST-040 do; the language models, the
+embeddings and the transcription fail with `Error::Validation` on a setting
+TypeScript drops with a warning or refuses, as HST-008 does.
+
+[HST-042] A Mistral chat call MUST read the `mistral` entry as
+`mistral-chat-language-model.ts` reads it: `safePrompt` MUST be sent as
+`safe_prompt`, `documentImageLimit` as `document_image_limit`,
+`documentPageLimit` as `document_page_limit`, `promptCacheKey` as
+`prompt_cache_key` and `parallelToolCalls` as `parallel_tool_calls` (only
+with tools, HST-014), the last two in place of the core cache key and
+parallel tool calls;
+`reasoningEffort` (`high` or `none`) MUST be sent as `reasoning_effort` in
+place of HST-014's mapping of the core setting, and MUST fail with
+`Error::Validation` for a model without reasoning settings; under an output
+schema, `strictJsonSchema` MUST be the `strict` of the `json_schema`
+response format, false when unset, and `structuredOutputs: false` MUST send
+`response_format: {"type": "json_object"}` instead and put the instruction
+`JSON schema:`, the schema as compact JSON and `You MUST answer with a JSON
+object that matches the JSON schema above.`, each on its own line, at the
+end of the first system message after a blank line, or as a new first system
+message. A strict function tool (`Tool::is_strict`) MUST be sent with
+`strict: true` in its `function`. A key other than these, a value of another
+type, a `reasoningEffort` other than `high` or `none`, or an entry that is
+not an object MUST fail with `Error::Validation` before any request. Usage
+MUST report `prompt_tokens_details.cached_tokens` as cache-read tokens when
+`num_cached_tokens` is absent.
+Falsifier: A recorded `mistral-small-latest` body for the entry `{"safePrompt": true, "documentImageLimit": 4, "documentPageLimit": 16, "promptCacheKey": "k", "parallelToolCalls": false, "reasoningEffort": "none"}` with one tool and core effort `high` lacks `safe_prompt: true`, `document_image_limit: 4`, `document_page_limit: 16`, `prompt_cache_key: "k"`, `parallel_tool_calls: false` or `reasoning_effort: "none"`; one with an output schema and `{"strictJsonSchema": true}` sends `strict` false; one with an output schema, `{"structuredOutputs": false}` and a system message `S` sends a `response_format` other than `{"type": "json_object"}` or a first system message other than `S`, a blank line, `JSON schema:`, the schema and `You MUST answer with a JSON object that matches the JSON schema above.` on five lines; a strict tool lacks `strict: true`; `{"reasoningEffort": "high"}` for `mistral-large-latest`, `{"reasoningEffort": "medium"}`, `{"safePrompt": "yes"}`, `{"topK": 3}` or the entry `[]` sends a request or fails with another error kind; or a stream whose usage has `prompt_tokens_details: {"cached_tokens": 4}` and no `num_cached_tokens` reports cache-read tokens other than 4.
+Mechanism: hosts
+Rationale: `mistral-chat-language-model-options.ts` and `getArgs`; the JSON instruction is `injectJsonInstructionIntoMessages` of `provider-utils`, and `convertMistralUsage` reads `prompt_tokens_details` before `prompt_token_details`.
+Status: Agreed 2026-10-24
+
+The Conversations API reasons only on these models
+(`mistral-conversation-language-model.ts`): `glm-5-2`, `labs-leanstral-1-5`,
+`labs-leanstral-1-5-1`, `magistral-medium-latest`, `magistral-small-latest`,
+`mistral-large-4`, `mistral-large-4-0`, `mistral-medium`,
+`mistral-medium-2604`, `mistral-medium-3`, `mistral-medium-3-5`,
+`mistral-medium-3.5`, `mistral-medium-latest`, `mistral-small-2603`,
+`mistral-small-latest`, `mistral-vibe-cli-fast`, `mistral-vibe-cli-latest`,
+`mistral-vibe-cli-with-tools` and `zai-glm-5-2`. A built-in tool call part
+of that API names its tool after the call's tool whose id is `mistral.` and
+the wire name (`web_search` or `web_search_premium`), else after the wire
+name.
+
+[HST-043] A call on the Conversations protocol MUST send `POST
+<base>/conversations` with the Mistral key and `{"model", "store": false,
+"stream": true, "instructions", "inputs", "tools", "completion_args"}`.
+`instructions` MUST be the system messages' text joined by a blank line,
+absent without one, and hold HST-042's JSON instruction under
+`structuredOutputs: false`; `completion_args` MUST hold the limit, sampling,
+penalty, stop, seed, reasoning and response format fields HST-014 and
+HST-042 give a chat body, and `tool_choice` as HST-014 maps it; `inputs`
+MUST hold, in order, each user message as `{"type": "message.input", "role":
+"user", "content": <HST-015's user parts>}`, each assistant turn's text and
+reasoning as `{"type": "message.input", "role": "assistant", "content":
+<HST-015's text and thinking parts>}`, cut before each tool call and with no
+`prefix`, each tool call as `{"type": "function.call", "tool_call_id",
+"name", "arguments": <the JSON text>}`, and each tool result as `{"type":
+"function.result", "tool_call_id", "result": <HST-015's string content>}`. A
+built-in tool call part MUST go as `function.call` with `name` from its
+`mistral` metadata's `function`, else `name`, else its tool's wire name, and
+`arguments` the `arguments` text of its arguments, else their JSON; its
+return MUST go as `function.result` whose `result` is its value's
+`info.result` when that is a string, else the JSON of `info.result`, else of
+`info`, else `null`. `tools` MUST hold each function tool as HST-042 sends
+it and each web search tool as `{"type": "web_search"}` or `{"type":
+"web_search_premium"}`; a named tool choice MUST keep only the named
+function or web search tool, as HST-014 does. Before any request the call
+MUST fail with `Error::Validation` when the `mistral` entry holds
+`safePrompt`, `documentImageLimit`, `documentPageLimit`, `promptCacheKey` or
+`parallelToolCalls`, when a core cache key, parallel tool calls or a setting
+HST-008 names for Mistral is set, when another provider tool is declared, or
+when a reasoning setting or `reasoningEffort` is set for a model the
+Conversations API does not reason on. A snapshot of a model with this
+protocol MUST restore it in a registry where `mistral::register` ran.
+Falsifier: A recorded `mistral-medium-latest` body for a history of system `S`, user `U`, an assistant turn of reasoning `R`, text `T` and a call `c1` of tool `t` with arguments `{"a": 1}`, a JSON result `{"b": 2}` of `c1`, a built-in call `e1` of `web_search` with arguments `{"arguments": "q"}` and metadata `{"type": "tool.execution", "name": "web_search", "function": "web_search"}`, its return `{"info": {"result": "r"}}`, and a user message `V`, with the strict tool `t` and `mistral::web_search()`, output limit 100, seed 7, core effort `low` and an output schema, goes to another URL or credential, or differs from `{"model": "mistral-medium-latest", "store": false, "stream": true, "instructions": "S", "inputs": [{"type": "message.input", "role": "user", "content": [{"type": "text", "text": "U"}]}, {"type": "message.input", "role": "assistant", "content": [{"type": "thinking", "thinking": [{"type": "text", "text": "R"}], "closed": true}, {"type": "text", "text": "T"}]}, {"type": "function.call", "tool_call_id": "c1", "name": "t", "arguments": "{\"a\":1}"}, {"type": "function.result", "tool_call_id": "c1", "result": "{\"b\":2}"}, {"type": "function.call", "tool_call_id": "e1", "name": "web_search", "arguments": "q"}, {"type": "function.result", "tool_call_id": "e1", "result": "r"}, {"type": "message.input", "role": "user", "content": [{"type": "text", "text": "V"}]}], "tools": [{"type": "function", "function": {"name": "t", "description": <t's>, "parameters": <t's>, "strict": true}}, {"type": "web_search"}], "completion_args": {"max_tokens": 100, "random_seed": 7, "reasoning_effort": "high", "response_format": {"type": "json_schema", "json_schema": {"name": "output", "strict": false, "schema": <the schema>}}}}`; a tool choice of `web_search` sends `tools` other than `[{"type": "web_search"}]` or a `tool_choice` other than `any`; a call with no system message and `{"structuredOutputs": false}` under an output schema lacks `instructions` starting with `JSON schema:`; a call for `mistral-large-latest` with effort `low`, one with the entry `{"safePrompt": true}`, one with a core cache key, or one with an Anthropic web search tool, sends a request or fails with another error kind; or a restored snapshot of a model with the protocol streams to another URL than `<base>/conversations`.
+Mechanism: hosts
+Rationale: `convert-to-mistral-conversation-inputs.ts`, `mistral-conversation-prepare-tools.ts` and `getArgs` in `mistral-conversation-language-model.ts`, which warns about the five options and sends `store: false`; a built-in execution is replayed as a call and a result because entry ids cannot be sent as inputs.
+Status: Agreed 2026-10-24
+
+[HST-044] A Conversations stream MUST read its events:
+`conversation.response.started` gives the response id (`conversation_id`);
+`message.output.delta` gives the response model from its first `model`, and
+its `content`, a string or one part, as text for a string or a `text` part
+and as reasoning for a `thinking` part, in a block keyed by the event's
+`id`, its `content_index` (0 when absent) and the block kind, where a delta
+for another key ends the open block first; a `tool_reference` part with a
+URL MUST become a source `{"sourceType": "url", "id", "url", "title": <the
+title, else the URL>}`, once per URL, in the final message's `mistral`
+metadata `sources`; `function.call.delta` gives a tool call delta keyed by
+`tool_call_id`, with `name` and `arguments`, after ending any open block;
+`tool.execution.started` and `tool.execution.delta` open or continue a
+built-in tool call by the event's `id`, named as the paragraph above says,
+with their `arguments` joined; `tool.execution.done` MUST end it with the
+arguments `{"arguments": <the joined text>}` and the `mistral` metadata
+`{"type": "tool.execution", "name", "function"}` (`function` when given),
+followed by a built-in tool return whose value is `{"info": <info>}`, or
+`{}` without `info`; and `conversation.response.done` gives the usage
+(`prompt_tokens` and `completion_tokens`, 0 when absent, with the cache-read
+tokens of HST-016 and HST-042). A `conversation.response.error` event MUST
+end the call with an `Error::Provider` holding its `message` and `code`,
+classified as HST-018 classifies a Mistral stream error, and a
+`tool.execution.done` for an id not open MUST end it with an
+`Error::Provider` of kind `Response`. The finish reason MUST be `error` when
+the stream ends without `conversation.response.done` or with an open
+execution, else `tool_call` when a function call was read, else `stop`.
+Falsifier: A recorded stream of `conversation.response.started` with `conversation_id` `conv_1`; a `message.output.delta` with `id` `m1`, `content_index` 0, `model` `mistral-medium-2604` and a `thinking` part `A`; one with `id` `m1`, `content_index` 1 and a `text` part `B`; a `tool.execution.started` with `id` `e1`, `name` `web_search` and `arguments` `{"q`; a `tool.execution.delta` for `e1` with `arguments` `":1}`; a `tool.execution.done` for `e1` with `function` `web_search` and `info` `{"result": "r"}`; a `message.output.delta` with `id` `m2`, `content_index` 0 and a `tool_reference` part with `url` `https://a.test` and `title` `A`, then one with the same URL and no title; one with `id` `m2`, `content_index` 0 and the string content `C`; a `function.call.delta` with `tool_call_id` `c1`, `name` `t`, `arguments` `{}` and `output_index` 0; and a `conversation.response.done` with `prompt_tokens` 12, `completion_tokens` 5 and `num_cached_tokens` 3, for a call with the tools `t` and `mistral::web_search()`, delivers other than reasoning `A`, text `B`, a built-in call `e1` of tool `web_search` with the arguments `{"arguments": "{\"q\":1}"}` and the metadata `{"type": "tool.execution", "name": "web_search", "function": "web_search"}`, its return `{"info": {"result": "r"}}`, text `C` and a call `c1` of `t`, each block ended before the next starts; ends with a response id other than `conv_1`, a response model other than `mistral-medium-2604`, a finish reason other than `tool_call`, usage other than 12 input, 5 output and 3 cache-read tokens, or `mistral.sources` other than one source for `https://a.test` titled `A`; a stream that ends after `started` and a text delta gives a finish reason other than `error`; a `conversation.response.error` with `message` `m` and `code` 429 does not end the call with a `RateLimit` provider error whose message is `m`; or a `tool.execution.done` for `e9` does not end it with a `Response` provider error.
+Mechanism: hosts
+Rationale: `doStream` and `createContentConverter` in `mistral-conversation-language-model.ts`; sources go in the final metadata as Google's do (decision 01M5KK631M310X7CF8TDFTM32P), since the core has no source part.
+Status: Agreed 2026-10-24
+
+[HST-045] `ops::embed` with a Mistral model MUST send `POST
+<base>/embeddings` with the Mistral key and `{"model", "input": <the
+values>, "encoding_format": "float"}`, with the `mistral` options `metadata`
+as `metadata`, `outputDimension` as `output_dimension` and `outputDtype` as
+`output_dtype`, at most 32 values per call and one call at a time, and
+return each `data[].embedding` with `usage.prompt_tokens` as input tokens. A
+`metadata` that is not an object, an `outputDimension` that is not a
+positive integer, an `outputDtype` other than `float`, `int8`, `uint8`,
+`binary` or `ubinary`, or another key MUST fail with `Error::Validation`
+before any request.
+Falsifier: A recorded `mistral-embed` call with the values `a` and `b` and the entry `{"metadata": {"k": "v"}, "outputDimension": 256, "outputDtype": "int8"}` goes to another URL or credential or differs from `{"model": "mistral-embed", "input": ["a", "b"], "encoding_format": "float", "metadata": {"k": "v"}, "output_dimension": 256, "output_dtype": "int8"}`; 33 values are split other than 32 and 1, or the second call starts before the first answers; a response with two embeddings and `usage.prompt_tokens` 7 returns other than those embeddings and 7 input tokens; or `{"outputDimension": 0}`, `{"outputDtype": "fp16"}` or `{"dimensions": 256}` sends a request or fails with another error kind.
+Mechanism: hosts
+Rationale: `mistral-embedding-model.ts`: 32 values per call and no parallel calls.
+Status: Agreed 2026-10-24
+
+[HST-046] `ops::generate_audio` with a Mistral model MUST send `POST
+<base>/audio/speech` with the Mistral key and `{"model", "input": <the
+text>, "voice_id": <the voice>, "response_format": <the format>, "stream":
+false}`, with the `mistral` options `refAudio` as `ref_audio` in place of
+`voice_id`, `expressiveness` as `expressiveness` and `phonemeHints` as
+`phoneme_hints`, and return the response's `audio_data`, decoded from
+base64, as one file part of the format's media type: `mp3` `audio/mpeg`,
+`wav` `audio/wav`, `pcm` `audio/pcm`, `flac` `audio/flac` and `opus`
+`audio/opus`. The format MUST default to `mp3`; another format MUST be sent
+as `mp3` with a warning in `Item.warnings`, and the prompt's instructions, a
+speed and a language MUST be left out with a warning each. An empty
+`refAudio`, an `expressiveness` outside 1 to 5, a `phonemeHints` that is
+not an object of non-empty keys to non-empty lists of non-empty strings, or
+another key MUST fail with `Error::Validation` before any request, and a
+response without `audio_data` MUST fail with `Error::Provider`.
+Falsifier: A recorded `voxtral-mini-tts-latest` call for the text `hi`, voice `v1` and format `wav` goes to another URL or credential, differs from `{"model": "voxtral-mini-tts-latest", "input": "hi", "voice_id": "v1", "response_format": "wav", "stream": false}`, or returns other than the decoded `audio_data` bytes as one `audio/wav` part with no warning; one with `{"refAudio": "AAAA", "expressiveness": 3, "phonemeHints": {"hi": ["haɪ"]}}` sends `voice_id`, or lacks `ref_audio: "AAAA"`, `expressiveness: 3` or `phoneme_hints: {"hi": ["haɪ"]}`; one with format `aac`, instructions, speed 1.5 and language `en` sends a `response_format` other than `mp3`, sends an instruction, speed or language field, or returns other than four warnings; `{"expressiveness": 6}`, `{"refAudio": ""}`, `{"phonemeHints": {"hi": []}}` or `{"voice": "v"}` sends a request or fails with another error kind; or a response `{}` gives another error kind.
+Mechanism: hosts
+Rationale: `mistral-speech-model.ts`, which warns about the format, instructions, speed and language and falls back to `mp3`.
+Status: Agreed 2026-10-24
+
+The transcription models that cannot take a language with timestamps are
+`voxtral-mini-2507`, `voxtral-mini-2602` and `voxtral-mini-latest`
+(`mistral-transcription-model.ts`).
+
+[HST-047] `ops::transcribe` with a Mistral model MUST send `POST
+<base>/audio/transcriptions` with the Mistral key as multipart with
+`model`, the audio as `file` named `audio.<extension>`, with OAI-019's
+extension for its media type, and the `mistral` options `language`,
+`returnLanguage` as `return_language`, `temperature`,
+`timestampGranularities` as one `timestamp_granularities` field per value,
+`diarize`, and `contextBias` as one `context_bias` field per value; and
+return the response's `text`, its `segments` (`text`, `start`, `end`), its
+`language`, the duration `usage.prompt_audio_seconds`, else the last
+segment's end, the usage (`prompt_tokens` as input and `completion_tokens`
+as output tokens) and the `mistral` metadata `usage` (`promptTokens`,
+`completionTokens`, `totalTokens`, `promptAudioSeconds` and `requestCount`,
+those the response holds) and `segments` (those with a `type`, `score` or
+`speaker_id`, as `{"text", "startSecond", "endSecond", "type", "score",
+"speakerId"}`), each absent when the response lacks it. Before any request
+the call MUST fail with `Error::Validation` when `language` is given with
+`returnLanguage: true`, or with `timestampGranularities` on a model named
+above; when `language` or a `contextBias` entry is empty,
+`timestampGranularities` is empty or holds other than `segment` or `word`,
+or another key is given; and a response without `text` MUST fail with
+`Error::Provider`.
+Falsifier: A recorded `voxtral-mini-transcribe-latest` call with MP3 bytes and the entry `{"language": "en", "temperature": 0.2, "timestampGranularities": ["segment"], "diarize": true, "contextBias": ["Mistral", "Voxtral"]}` goes to another URL or credential, or its form lacks `model`, the file as `audio.mp3` of type `audio/mpeg`, `language` `en`, `temperature` `0.2`, `timestamp_granularities` `segment`, `diarize` `true` or the two `context_bias` fields; a response with text `t`, language `fr`, the segment `{"type": "transcription_segment", "text": "t", "start": 0, "end": 1.5, "speaker_id": "s1"}` and usage `{"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12, "prompt_audio_seconds": 1.5, "request_count": 1}` returns other than text `t`, one segment from 0 to 1.5, language `fr`, duration 1.5, 10 input and 2 output tokens, or `mistral` metadata other than `{"usage": {"promptTokens": 10, "completionTokens": 2, "totalTokens": 12, "promptAudioSeconds": 1.5, "requestCount": 1}, "segments": [{"text": "t", "startSecond": 0, "endSecond": 1.5, "type": "transcription_segment", "speakerId": "s1"}]}`; a response without `usage` whose last segment ends at 2 gives a duration other than 2, or one whose segments have no `type`, `score` or `speaker_id` gives `mistral` metadata with `segments`; `{"language": "en", "returnLanguage": true}`, `{"language": "en", "timestampGranularities": ["segment"]}` on `voxtral-mini-latest`, `{"timestampGranularities": ["sentence"]}`, `{"contextBias": [""]}` or `{"prompt": "p"}` sends a request or fails with another error kind; or a response `{"model": "m"}` gives another error kind.
+Mechanism: hosts
+Rationale: `mistral-transcription-model.ts` and `mistral-transcription-model-options.ts`; the two conflicts are its `InvalidArgumentError`s.
 Status: Agreed 2026-10-24

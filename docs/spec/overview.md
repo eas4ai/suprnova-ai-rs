@@ -38,7 +38,7 @@ same streams. It departs from Python only where a requirement says so.
 | openai.md | OAI | OpenAI's own APIs: the Responses, Chat Completions and Completions language models with their options, history, tools and streams, embeddings, images, speech, transcription, speech translation, files, skills, batches, realtime and Live sessions, decisions and prompt caching |
 | anthropic.md | ANT | Anthropic's Messages API: the language model with its options, model capabilities, structured output, tools, history, stream, usage and prompt caching, the hosts that share it, files, skills, batches and evaluation |
 | vertex.md | VTX | Google Vertex AI: endpoints and authentication, Gemini on Vertex, embeddings, images, video, Chirp and Gemini speech, Cloud Speech-to-Text and Gemini transcription, the Interactions API, and the Anthropic, open-model and xAI partner providers |
-| hosts.md | HST | the hosted chat providers that use the Chat Completions, Responses or Messages protocol: Cerebras, DeepInfra, DeepSeek, Fireworks, Mistral, Moonshot AI, Together AI, Z.ai, xAI, Hugging Face and MiniMax; tool calls without an index in any Chat Completions stream; errors and terminal events in any Responses stream |
+| hosts.md | HST | the hosted chat providers that use the Chat Completions, Responses or Messages protocol: Cerebras, DeepInfra, DeepSeek, Fireworks, Mistral, Moonshot AI, Together AI, Z.ai, xAI, Hugging Face and MiniMax, with the other model kinds their packages ship and Mistral's Conversations API; tool calls without an index in any Chat Completions stream; errors and terminal events in any Responses stream |
 
 ## Not yet specified
 

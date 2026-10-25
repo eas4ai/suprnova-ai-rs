@@ -1,6 +1,6 @@
 # Roadmap
 
-Current: deepseek-minimax-whole
+Current: mistral-whole
 
 ## rename-to-suprnova-ai
 
@@ -358,6 +358,33 @@ most four on DeepSeek (`deepseek-v4-flash` chat and one small image
 upload), none on MiniMax, which has no key here, so MiniMax is checked with
 recorded requests only. This is the second of the four commitments that
 port the remaining hosts whole; Mistral and xAI follow.
+
+Done when the hosts, identity and checks mechanisms pass for every
+requirement above, their receipts are current, and the review and the
+adversary report have no open findings.
+
+## mistral-whole
+
+Requirements: HST-042, HST-043, HST-044, HST-045, HST-046, HST-047, PKG-002, PKG-006
+
+Port Mistral (`@ai-sdk/mistral` 4.0.69) whole. The `mistral` chat options
+(safe prompt, document limits, prompt cache key, parallel tool calls,
+reasoning effort, strict schemas, JSON-object mode and strict function
+tools) on the `providers::hosts::mistral` chat model; the Conversations API
+as the `mistral::conversations()` protocol attached with
+`Model::with_protocol`, with the `mistral::web_search()` and
+`mistral::web_search_premium()` built-in tools, sources in the final
+`mistral.sources` metadata and snapshot restore through `mistral::register`;
+embeddings through `ops::embed`, speech through `ops::generate_audio` and
+transcription through `ops::transcribe` on the same provider. Speech calls
+return TypeScript's warnings in `Item.warnings` (HST-046); the other model
+kinds refuse an unsupported setting with `Error::Validation` (HST-008).
+Update `README.md`, `docs/PORT.md` and the host module docs. The tests of
+each requirement in `tests/spec_hosts.rs` are named after it, and
+`scripts/check-hosts.sh` reports one result per requirement. Live calls:
+none; there is no Mistral key here, so every requirement is checked with
+recorded requests only. This is the third of the four commitments that port
+the remaining hosts whole; xAI follows.
 
 Done when the hosts, identity and checks mechanisms pass for every
 requirement above, their receipts are current, and the review and the
