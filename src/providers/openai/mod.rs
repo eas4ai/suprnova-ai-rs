@@ -88,7 +88,9 @@ mod transcription;
 pub use completions::OpenAICompletionsProtocol;
 pub use decisions::OpenAIDecisionsProtocol;
 pub use embedding::OpenAIEmbeddingProtocol;
+pub(crate) use images::media_bytes;
 pub use params::OpenAIParams;
+pub(crate) use transcription::extension as audio_extension;
 // Kept for callers of the old name-based choice; it is deprecated.
 #[allow(deprecated)]
 pub use protocol::default_protocol;

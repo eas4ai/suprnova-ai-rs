@@ -172,6 +172,8 @@ pub(crate) struct Models {
     pub videos: Option<video::Videos>,
     /// Mistral's speech model (HST-046).
     pub speech: bool,
+    /// Mistral's transcription model (HST-047).
+    pub transcription: bool,
 }
 /// Whose embedding API a host serves.
 #[derive(Clone, Copy, Debug)]
@@ -191,11 +193,13 @@ impl Models {
         files: false,
         videos: None,
         speech: false,
+        transcription: false,
     };
     /// Mistral's: the language model, embeddings and speech.
     pub(crate) const MISTRAL: Self = Self {
         embeddings: Some(Embeddings::Mistral),
         speech: true,
+        transcription: true,
         ..Self::CHAT
     };
     /// DeepSeek's: the language model and the files API.
@@ -234,6 +238,7 @@ impl Models {
             || self.reranking
             || self.videos.is_some()
             || self.speech
+            || self.transcription
     }
 }
 impl Host {

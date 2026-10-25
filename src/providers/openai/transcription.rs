@@ -84,9 +84,9 @@ pub(super) fn realtime_model(model: &str) -> bool {
     model == "gpt-realtime-whisper" || model.starts_with("gpt-realtime-whisper-")
 }
 
-/// The extension OpenAI reads a file's audio format from
+/// The extension OpenAI and Mistral read a file's audio format from
 /// (`mediaTypeToExtension`).
-fn extension(media_type: &str) -> String {
+pub(crate) fn extension(media_type: &str) -> String {
     let lower = media_type.to_ascii_lowercase();
     let subtype = lower.split_once('/').map_or("", |(_, sub)| sub);
     match subtype {
