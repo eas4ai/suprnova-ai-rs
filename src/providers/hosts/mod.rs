@@ -200,7 +200,7 @@ impl Models {
         speech: false,
         transcription: false,
     };
-    /// Mistral's: the language model, embeddings and speech.
+    /// Mistral's: the language model, embeddings, speech and transcription.
     pub(crate) const MISTRAL: Self = Self {
         embeddings: Some(Embeddings::Mistral),
         speech: true,

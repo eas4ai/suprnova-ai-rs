@@ -7997,3 +7997,27 @@ async fn hst_044_an_unknown_event_or_content_shape_finishes_with_error() {
     assert_eq!(handle.finish_reason(), Some("stop"));
     assert_eq!(handle.message().text(), "A");
 }
+
+#[tokio::test]
+async fn hst_047_a_url_input_fails_naming_mistral() {
+    // Mistral takes audio as bytes; a URL on a provider without a download
+    // transport fails before any request, naming Mistral and not OpenAI.
+    let transport = Recorder::new([json_reply(json!({"model": "m", "text": "t"}))]);
+    let model = model(
+        "mistral",
+        "voxtral-mini-transcribe-latest",
+        transport.clone(),
+    );
+    let url = TranscribeInput::File(
+        FilePart::from_url("https://a.test/audio.mp3", Some("audio/mpeg")).unwrap(),
+    );
+    let error = suprnova_ai::ops::transcribe(&model, url, Default::default(), Default::default())
+        .await
+        .unwrap_err();
+    let Error::Validation(message) = error else {
+        panic!("{error:?}");
+    };
+    assert!(message.contains("Mistral"), "{message}");
+    assert!(!message.contains("OpenAI"), "{message}");
+    assert_eq!(transport.count(), 0);
+}
