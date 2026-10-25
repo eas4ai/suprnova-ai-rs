@@ -7559,3 +7559,174 @@ async fn hst_045_invalid_mistral_embedding_entries_fail_before_a_request() {
         assert_eq!(transport.count(), 0, "{value}");
     }
 }
+
+// HST-046: speech.
+
+use suprnova_ai::providers::operations::{AudioParams, AudioPrompt};
+
+fn audio_prompt(text: &str, instructions: Option<&str>) -> AudioPrompt {
+    AudioPrompt {
+        text: text.into(),
+        instructions: instructions.map(str::to_owned),
+    }
+}
+fn speech_params(voice: Option<&str>, format: Option<&str>, entry: Option<Value>) -> AudioParams {
+    AudioParams {
+        voice: voice.map(str::to_owned),
+        output_format: format.map(str::to_owned),
+        speed: None,
+        language: None,
+        provider_options: entry
+            .map(|value| [("mistral".to_owned(), value)].into())
+            .unwrap_or_default(),
+    }
+}
+fn audio_reply(bytes: &[u8]) -> (u16, Vec<u8>) {
+    json_reply(json!({"audio_data": b64(bytes)}))
+}
+type Audio = Result<suprnova_ai::providers::operations::Item<Vec<FilePart>>, Error>;
+async fn mistral_speech(
+    prompt: AudioPrompt,
+    params: AudioParams,
+    reply: (u16, Vec<u8>),
+) -> (Arc<Recorder>, Audio) {
+    let transport = Recorder::new([reply]);
+    let model = model("mistral", "voxtral-mini-tts-latest", transport.clone());
+    let result = suprnova_ai::ops::generate_audio(&model, prompt, params, Default::default()).await;
+    (transport, result)
+}
+
+#[tokio::test]
+async fn hst_046_a_mistral_speech_call_sends_the_body_typescript_sends() {
+    let (transport, result) = mistral_speech(
+        audio_prompt("hi", None),
+        speech_params(Some("v1"), Some("wav"), None),
+        audio_reply(&[1, 2, 3]),
+    )
+    .await;
+    let item = result.unwrap();
+    let request = transport.request();
+    assert_eq!(request.url, "https://api.mistral.ai/v1/audio/speech");
+    assert!(
+        request
+            .headers
+            .iter()
+            .any(|(name, value)| name.eq_ignore_ascii_case("authorization")
+                && value == "Bearer sk-test"),
+        "{:?}",
+        request.headers
+    );
+    assert_eq!(
+        transport.body(),
+        json!({"model": "voxtral-mini-tts-latest", "input": "hi", "voice_id": "v1", "response_format": "wav", "stream": false})
+    );
+    assert_eq!(item.value.len(), 1);
+    assert_eq!(item.value[0].media_type, "audio/wav");
+    assert_eq!(
+        item.value[0].data,
+        suprnova_ai::types::messages::FileData::Bytes(vec![1, 2, 3])
+    );
+    assert!(item.warnings.is_empty(), "{:?}", item.warnings);
+    // A reference audio replaces the voice; the format defaults to mp3.
+    let (transport, result) = mistral_speech(
+        audio_prompt("hi", None),
+        speech_params(
+            Some("v1"),
+            None,
+            Some(json!({"refAudio": "AAAA", "expressiveness": 3, "phonemeHints": {"hi": ["haɪ"]}})),
+        ),
+        audio_reply(&[4]),
+    )
+    .await;
+    let item = result.unwrap();
+    assert_eq!(
+        transport.body(),
+        json!({"model": "voxtral-mini-tts-latest", "input": "hi", "ref_audio": "AAAA", "expressiveness": 3, "phoneme_hints": {"hi": ["haɪ"]}, "response_format": "mp3", "stream": false})
+    );
+    assert_eq!(item.value[0].media_type, "audio/mpeg");
+    for (format, media_type) in [
+        ("mp3", "audio/mpeg"),
+        ("wav", "audio/wav"),
+        ("pcm", "audio/pcm"),
+        ("flac", "audio/flac"),
+        ("opus", "audio/opus"),
+    ] {
+        let (transport, result) = mistral_speech(
+            audio_prompt("hi", None),
+            speech_params(Some("v1"), Some(format), None),
+            audio_reply(&[5]),
+        )
+        .await;
+        assert_eq!(result.unwrap().value[0].media_type, media_type, "{format}");
+        assert_eq!(transport.body()["response_format"], format);
+    }
+}
+
+#[tokio::test]
+async fn hst_046_unsupported_speech_settings_are_warned_about_and_left_out() {
+    let params = AudioParams {
+        voice: Some("v1".into()),
+        output_format: Some("aac".into()),
+        speed: Some(1.5),
+        language: Some("en".into()),
+        provider_options: Default::default(),
+    };
+    let (transport, result) =
+        mistral_speech(audio_prompt("hi", Some("calm")), params, audio_reply(&[1])).await;
+    let item = result.unwrap();
+    assert_eq!(
+        transport.body(),
+        json!({"model": "voxtral-mini-tts-latest", "input": "hi", "voice_id": "v1", "response_format": "mp3", "stream": false})
+    );
+    assert_eq!(item.value[0].media_type, "audio/mpeg");
+    assert_eq!(item.warnings.len(), 4, "{:?}", item.warnings);
+    for feature in ["outputFormat", "instructions", "speed", "language"] {
+        assert!(
+            warned(&item.warnings, "unsupported", Some(feature)),
+            "{feature}: {:?}",
+            item.warnings
+        );
+    }
+}
+
+#[tokio::test]
+async fn hst_046_invalid_speech_entries_and_a_missing_audio_fail() {
+    for value in [
+        json!({"expressiveness": 6}),
+        json!({"expressiveness": 0}),
+        json!({"expressiveness": "3"}),
+        json!({"refAudio": ""}),
+        json!({"refAudio": 1}),
+        json!({"phonemeHints": {"hi": []}}),
+        json!({"phonemeHints": {"": ["a"]}}),
+        json!({"phonemeHints": {"hi": [""]}}),
+        json!({"phonemeHints": "x"}),
+        json!({"voice": "v"}),
+        json!([]),
+    ] {
+        let (transport, result) = mistral_speech(
+            audio_prompt("hi", None),
+            speech_params(Some("v1"), None, Some(value.clone())),
+            audio_reply(&[1]),
+        )
+        .await;
+        match result {
+            Err(Error::Validation(message)) => {
+                assert!(message.contains("mistral"), "{value}: {message}");
+            }
+            other => panic!("{value}: {:?}", other.err()),
+        }
+        assert_eq!(transport.count(), 0, "{value}");
+    }
+    let (_, result) = mistral_speech(
+        audio_prompt("hi", None),
+        speech_params(Some("v1"), None, None),
+        json_reply(json!({})),
+    )
+    .await;
+    assert!(
+        matches!(result, Err(Error::Provider(_))),
+        "{:?}",
+        result.err()
+    );
+}
