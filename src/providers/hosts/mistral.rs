@@ -87,7 +87,7 @@ pub(super) static HOST: Host = Host {
     default_base_url: "https://api.mistral.ai/v1",
     api_key_env: "MISTRAL_API_KEY",
     protocol: HostProtocol::Chat(&PROFILE),
-    models: Models::CHAT,
+    models: Models::MISTRAL,
 };
 
 /// Build the Mistral provider. An unset base URL becomes

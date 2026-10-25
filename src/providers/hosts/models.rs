@@ -1,9 +1,10 @@
 //! The model kinds a host serves beside chat, on the protocol its provider
 //! gives every model: Together AI's, DeepInfra's and Fireworks' embeddings
 //! on the compatible embedding protocol (HST-028) and their image models
-//! (HST-029 to HST-031), Together AI's reranking (HST-032), and MiniMax's
-//! video model on its Messages protocol (HST-040, HST-041).
-use super::{Models, images, rerank, video};
+//! (HST-029 to HST-031), Together AI's reranking (HST-032), MiniMax's
+//! video model on its Messages protocol (HST-040, HST-041), and Mistral's
+//! embeddings (HST-045).
+use super::{Embeddings, Models, embeddings, images, rerank, video};
 use crate::{
     Error, Model, Provider, ProviderProtocol, StreamOptions,
     providers::{
@@ -38,15 +39,9 @@ impl HostModels {
     pub(super) fn new(chat: HostChatProtocol, models: Models) -> Self {
         Self { chat, models }
     }
-    fn embeddings(&self) -> Result<OpenAIEmbeddingProtocol, Error> {
-        if self.models.embeddings {
-            Ok(OpenAIEmbeddingProtocol::compatible(
-                EMBEDDINGS_PER_CALL,
-                true,
-            ))
-        } else {
-            Err(Error::UnsupportedOperation("embed".into()))
-        }
+    /// The compatible embedding protocol of the hosts that embed on it.
+    fn compatible_embeddings() -> OpenAIEmbeddingProtocol {
+        OpenAIEmbeddingProtocol::compatible(EMBEDDINGS_PER_CALL, true)
     }
 }
 
@@ -71,13 +66,24 @@ impl ProviderProtocol for HostModels {
         params: EmbedParams,
         provider: &dyn Provider,
     ) -> Result<Item<Vec<Vec<f64>>>, Error> {
-        self.embeddings()?
-            .embed(model, values, params, provider)
-            .await
+        match self.models.embeddings {
+            None => Err(Error::UnsupportedOperation("embed".into())),
+            Some(Embeddings::Compatible) => {
+                Self::compatible_embeddings()
+                    .embed(model, values, params, provider)
+                    .await
+            }
+            Some(Embeddings::Mistral) => {
+                embeddings::mistral(&self.chat.0.api, model, values, params, provider).await
+            }
+        }
     }
     fn embed_limits(&self, model: &Model) -> CallLimits {
-        self.embeddings()
-            .map_or_else(|_| CallLimits::default(), |e| e.embed_limits(model))
+        match self.models.embeddings {
+            None => CallLimits::default(),
+            Some(Embeddings::Compatible) => Self::compatible_embeddings().embed_limits(model),
+            Some(Embeddings::Mistral) => embeddings::MISTRAL_LIMITS,
+        }
     }
     async fn generate_image(
         &self,
