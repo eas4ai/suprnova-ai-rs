@@ -7730,3 +7730,228 @@ async fn hst_046_invalid_speech_entries_and_a_missing_audio_fail() {
         result.err()
     );
 }
+
+// HST-047: transcription.
+
+use suprnova_ai::providers::operations::{TranscribeInput, TranscribeParams, Transcription};
+
+fn mp3_input() -> TranscribeInput {
+    TranscribeInput::File(FilePart::from_bytes(vec![1, 2, 3], Some("audio/mpeg"), None).unwrap())
+}
+fn transcribe_options(entry: Option<Value>) -> TranscribeParams {
+    TranscribeParams {
+        provider_options: entry
+            .map(|value| [("mistral".to_owned(), value)].into())
+            .unwrap_or_default(),
+    }
+}
+type Transcribed = Result<suprnova_ai::providers::operations::Item<Transcription>, Error>;
+async fn mistral_transcribe(
+    model_id: &str,
+    entry: Option<Value>,
+    reply: Value,
+) -> (Arc<Recorder>, Transcribed) {
+    let transport = Recorder::new([json_reply(reply)]);
+    let model = model("mistral", model_id, transport.clone());
+    let result = suprnova_ai::ops::transcribe(
+        &model,
+        mp3_input(),
+        transcribe_options(entry),
+        Default::default(),
+    )
+    .await;
+    (transport, result)
+}
+
+#[tokio::test]
+async fn hst_047_a_mistral_transcription_sends_the_form_typescript_sends() {
+    let (transport, result) = mistral_transcribe(
+        "voxtral-mini-transcribe-latest",
+        Some(json!({"language": "en", "temperature": 0.2, "timestampGranularities": ["segment"], "diarize": true, "contextBias": ["Mistral", "Voxtral"]})),
+        json!({
+            "model": "voxtral-mini-transcribe-latest",
+            "text": "t",
+            "language": "fr",
+            "segments": [{"type": "transcription_segment", "text": "t", "start": 0, "end": 1.5, "speaker_id": "s1"}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12, "prompt_audio_seconds": 1.5, "request_count": 1}
+        }),
+    )
+    .await;
+    let item = result.unwrap();
+    let request = transport.request();
+    assert_eq!(
+        request.url,
+        "https://api.mistral.ai/v1/audio/transcriptions"
+    );
+    assert!(
+        request
+            .headers
+            .iter()
+            .any(|(name, value)| name.eq_ignore_ascii_case("authorization")
+                && value == "Bearer sk-test"),
+        "{:?}",
+        request.headers
+    );
+    let sent = form_text(&transport);
+    for (name, value) in [
+        ("model", "voxtral-mini-transcribe-latest"),
+        ("language", "en"),
+        ("temperature", "0.2"),
+        ("timestamp_granularities", "segment"),
+        ("diarize", "true"),
+        ("context_bias", "Mistral"),
+        ("context_bias", "Voxtral"),
+    ] {
+        assert!(sent.contains(&form_field(name, value)), "{name}: {sent}");
+    }
+    assert!(
+        sent.contains("name=\"file\"; filename=\"audio.mp3\""),
+        "{sent}"
+    );
+    assert!(sent.contains("Content-Type: audio/mpeg"), "{sent}");
+    assert_eq!(item.value.text, "t");
+    assert_eq!(item.value.segments.len(), 1);
+    assert_eq!(
+        (
+            item.value.segments[0].start_second,
+            item.value.segments[0].end_second
+        ),
+        (0.0, 1.5)
+    );
+    assert_eq!(item.value.language.as_deref(), Some("fr"));
+    assert_eq!(item.value.duration_seconds, Some(1.5));
+    let usage = item.usage.as_ref().unwrap();
+    assert_eq!((usage.input_tokens, usage.output_tokens), (10, 2));
+    assert_eq!(
+        item.provider_metadata.as_ref().unwrap()["mistral"],
+        json!({
+            "usage": {"promptTokens": 10, "completionTokens": 2, "totalTokens": 12, "promptAudioSeconds": 1.5, "requestCount": 1},
+            "segments": [{"text": "t", "startSecond": 0, "endSecond": 1.5, "type": "transcription_segment", "speakerId": "s1"}]
+        })
+    );
+    // The detected language alone is asked for as return_language.
+    let (transport, result) = mistral_transcribe(
+        "voxtral-mini-transcribe-latest",
+        Some(json!({"returnLanguage": true})),
+        json!({"model": "m", "text": "t"}),
+    )
+    .await;
+    result.unwrap();
+    let sent = form_text(&transport);
+    assert!(
+        sent.contains(&form_field("return_language", "true")),
+        "{sent}"
+    );
+    assert!(!sent.contains("name=\"language\""), "{sent}");
+}
+
+#[tokio::test]
+async fn hst_047_the_duration_and_metadata_follow_what_the_response_holds() {
+    let (_, result) = mistral_transcribe(
+        "voxtral-mini-transcribe-latest",
+        None,
+        json!({"model": "m", "text": "t", "segments": [{"text": "a", "start": 0, "end": 1}, {"text": "b", "start": 1, "end": 2}]}),
+    )
+    .await;
+    let item = result.unwrap();
+    assert_eq!(item.value.duration_seconds, Some(2.0));
+    assert_eq!(item.value.segments.len(), 2);
+    assert!(item.value.language.is_none());
+    assert!(item.usage.is_none(), "{:?}", item.usage);
+    assert!(
+        item.provider_metadata.is_none(),
+        "{:?}",
+        item.provider_metadata
+    );
+    // A usage without segments gives only the usage fields it holds.
+    let (_, result) = mistral_transcribe(
+        "voxtral-mini-transcribe-latest",
+        None,
+        json!({"model": "m", "text": "t", "usage": {"prompt_tokens": 3}}),
+    )
+    .await;
+    let item = result.unwrap();
+    assert_eq!(
+        item.provider_metadata.as_ref().unwrap()["mistral"],
+        json!({"usage": {"promptTokens": 3}})
+    );
+    assert_eq!(
+        item.usage
+            .as_ref()
+            .map(|u| (u.input_tokens, u.output_tokens)),
+        Some((3, 0))
+    );
+    assert!(item.value.duration_seconds.is_none());
+}
+
+#[tokio::test]
+async fn hst_047_invalid_transcription_entries_and_a_missing_text_fail() {
+    for (model_id, value) in [
+        (
+            "voxtral-mini-transcribe-latest",
+            json!({"language": "en", "returnLanguage": true}),
+        ),
+        (
+            "voxtral-mini-latest",
+            json!({"language": "en", "timestampGranularities": ["segment"]}),
+        ),
+        (
+            "voxtral-mini-2507",
+            json!({"language": "en", "timestampGranularities": ["word"]}),
+        ),
+        (
+            "voxtral-mini-transcribe-latest",
+            json!({"timestampGranularities": ["sentence"]}),
+        ),
+        (
+            "voxtral-mini-transcribe-latest",
+            json!({"timestampGranularities": []}),
+        ),
+        (
+            "voxtral-mini-transcribe-latest",
+            json!({"contextBias": [""]}),
+        ),
+        ("voxtral-mini-transcribe-latest", json!({"language": ""})),
+        (
+            "voxtral-mini-transcribe-latest",
+            json!({"temperature": "hot"}),
+        ),
+        ("voxtral-mini-transcribe-latest", json!({"prompt": "p"})),
+        ("voxtral-mini-transcribe-latest", json!("x")),
+    ] {
+        let (transport, result) = mistral_transcribe(
+            model_id,
+            Some(value.clone()),
+            json!({"model": "m", "text": "t"}),
+        )
+        .await;
+        match result {
+            Err(Error::Validation(message)) => {
+                assert!(message.contains("mistral"), "{model_id} {value}: {message}");
+            }
+            other => panic!("{model_id} {value}: {:?}", other.err()),
+        }
+        assert_eq!(transport.count(), 0, "{model_id} {value}");
+    }
+    // A current model takes a language with timestamps.
+    let (transport, result) = mistral_transcribe(
+        "voxtral-mini-transcribe-latest",
+        Some(json!({"language": "en", "timestampGranularities": ["segment"]})),
+        json!({"model": "m", "text": "t"}),
+    )
+    .await;
+    result.unwrap();
+    assert_eq!(transport.count(), 1);
+    // A response without text is a provider error.
+    let (_, result) = mistral_transcribe(
+        "voxtral-mini-transcribe-latest",
+        None,
+        json!({"model": "m"}),
+    )
+    .await;
+    assert!(
+        matches!(result, Err(Error::Provider(_))),
+        "{:?}",
+        result.err()
+    );
+}
