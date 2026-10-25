@@ -7955,3 +7955,45 @@ async fn hst_047_invalid_transcription_entries_and_a_missing_text_fail() {
         result.err()
     );
 }
+
+#[tokio::test]
+async fn hst_044_an_unknown_event_or_content_shape_finishes_with_error() {
+    // TypeScript's closed schemas make such a chunk an error part and the
+    // finish reason `error`; the crate keeps the finish reason.
+    for events in [
+        vec![
+            conversation_started(),
+            json!({"type":"message.output.delta","id":"m1","content":"A"}),
+            json!({"type":"conversation.response.unknown","id":"x"}),
+            json!({"type":"conversation.response.done","usage":{}}),
+        ],
+        vec![
+            conversation_started(),
+            json!({"type":"message.output.delta","id":"m1","content":[{"type":"text","text":"A"}]}),
+            json!({"type":"conversation.response.done","usage":{}}),
+        ],
+        vec![
+            conversation_started(),
+            json!({"type":"message.output.delta","id":"m1","content":{"type":"image","url":"https://a.test"}}),
+            json!({"type":"conversation.response.done","usage":{}}),
+        ],
+    ] {
+        let transport = Recorder::new([conversation_sse(&events)]);
+        let model = conversations_model("mistral-medium-latest", transport);
+        let (handle, events) = call(&model, vec![user_message("hello")], Default::default()).await;
+        ok(&events);
+        assert_eq!(handle.finish_reason(), Some("error"));
+    }
+    // An empty string content is a known shape and changes nothing.
+    let transport = Recorder::new([conversation_sse(&[
+        conversation_started(),
+        json!({"type":"message.output.delta","id":"m1","content":""}),
+        json!({"type":"message.output.delta","id":"m1","content":"A"}),
+        json!({"type":"conversation.response.done","usage":{}}),
+    ])]);
+    let model = conversations_model("mistral-medium-latest", transport);
+    let (handle, events) = call(&model, vec![user_message("hello")], Default::default()).await;
+    ok(&events);
+    assert_eq!(handle.finish_reason(), Some("stop"));
+    assert_eq!(handle.message().text(), "A");
+}

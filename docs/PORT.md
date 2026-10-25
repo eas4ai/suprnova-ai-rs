@@ -222,7 +222,9 @@ These follow `docs/spec/models.md`, `docs/spec/agents.md`, `docs/spec/hosts.md`,
   entries refuse an option name their schemas do not take, where TypeScript
   strips it; a `conversation.response.error` event or a `tool.execution.done`
   without a start ends the call, where TypeScript continues the stream with
-  an error part; the function calls of a Conversations stream end when the
+  an error part; an event or content shape the stream reader does not know
+  is dropped and the stream finishes with `error`, as TypeScript's finish
+  reason does beside its error part; the function calls of a Conversations stream end when the
   stream does; and no live Mistral call has checked the port.
 - Chat Completions tool call deltas without an index, as Mistral and Moonshot
   AI send them, are told apart by their place in the chunk and their id; Python
