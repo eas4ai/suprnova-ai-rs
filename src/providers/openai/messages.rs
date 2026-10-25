@@ -287,7 +287,7 @@ fn huggingface_file(part: &FilePart, mt: &str) -> Result<Value, Error> {
     Ok(json!({"type":"input_image","image_url":url}))
 }
 /// Mistral takes images and PDFs (`convert-to-mistral-chat-messages.ts`).
-fn mistral_file(part: &FilePart, mt: &str) -> Result<Value, Error> {
+pub(super) fn mistral_file(part: &FilePart, mt: &str) -> Result<Value, Error> {
     let url = media::data_to_data_url(media_ref(&part.data), mt);
     if mt.starts_with("image/") {
         return Ok(json!({"type":"image_url","image_url":url}));
@@ -302,7 +302,7 @@ fn mistral_file(part: &FilePart, mt: &str) -> Result<Value, Error> {
     }
     Err(invalid(format!("Mistral does not take {mt} files")))
 }
-fn tool_result(value: &ToolResultValue, wire: Wire) -> Result<Value, Error> {
+pub(super) fn tool_result(value: &ToolResultValue, wire: Wire) -> Result<Value, Error> {
     let responses = matches!(wire, Wire::Responses(_));
     // Only OpenAI's Responses API takes files other than images in a result.
     let result_files = wire.responses_dialect() == Some(ResponsesDialect::OpenAI);
