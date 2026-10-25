@@ -64,6 +64,7 @@ use std::{fmt, sync::Arc};
 pub mod cerebras;
 pub mod deepinfra;
 pub mod deepseek;
+mod embeddings;
 mod files;
 pub mod fireworks;
 pub mod huggingface;
@@ -157,8 +158,8 @@ pub(crate) struct Host {
 /// model, which the host provider's default protocol serves.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Models {
-    /// Embeddings on OAI-016's compatible protocol (HST-028).
-    pub embeddings: bool,
+    /// The host's embedding model (HST-028, HST-045).
+    pub embeddings: Option<Embeddings>,
     /// The host's image model (HST-029 to HST-031).
     pub images: Option<images::Images>,
     /// Together AI's reranking (HST-032).
@@ -169,14 +170,28 @@ pub(crate) struct Models {
     /// MiniMax's video model (HST-040, HST-041).
     pub videos: Option<video::Videos>,
 }
+/// Whose embedding API a host serves.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Embeddings {
+    /// OAI-016's compatible protocol (HST-028).
+    Compatible,
+    /// Mistral's embeddings (HST-045).
+    Mistral,
+}
+
 impl Models {
     /// The language model alone.
     pub(crate) const CHAT: Self = Self {
-        embeddings: false,
+        embeddings: None,
         images: None,
         reranking: false,
         files: false,
         videos: None,
+    };
+    /// Mistral's: the language model and embeddings.
+    pub(crate) const MISTRAL: Self = Self {
+        embeddings: Some(Embeddings::Mistral),
+        ..Self::CHAT
     };
     /// DeepSeek's: the language model and the files API.
     pub(crate) const DEEPSEEK: Self = Self {
@@ -190,7 +205,7 @@ impl Models {
     };
     /// DeepInfra's: embeddings and images.
     pub(crate) const DEEPINFRA: Self = Self {
-        embeddings: true,
+        embeddings: Some(Embeddings::Compatible),
         images: Some(images::Images::DeepInfra),
         reranking: false,
         files: false,
@@ -198,7 +213,7 @@ impl Models {
     };
     /// Fireworks': embeddings and images.
     pub(crate) const FIREWORKS: Self = Self {
-        embeddings: true,
+        embeddings: Some(Embeddings::Compatible),
         images: Some(images::Images::Fireworks),
         reranking: false,
         files: false,
@@ -206,7 +221,7 @@ impl Models {
     };
     /// Together AI's: embeddings, images and reranking.
     pub(crate) const TOGETHER_AI: Self = Self {
-        embeddings: true,
+        embeddings: Some(Embeddings::Compatible),
         images: Some(images::Images::TogetherAI),
         reranking: true,
         files: false,
@@ -214,7 +229,10 @@ impl Models {
     };
     /// Whether the host serves a model kind beside its language model.
     fn beside_chat(self) -> bool {
-        self.embeddings || self.images.is_some() || self.reranking || self.videos.is_some()
+        self.embeddings.is_some()
+            || self.images.is_some()
+            || self.reranking
+            || self.videos.is_some()
     }
 }
 impl Host {
