@@ -7426,3 +7426,136 @@ async fn hst_044_an_unfinished_stream_and_stream_errors_are_reported() {
     assert_eq!(error.kind, ProviderErrorKind::Response, "{error:?}");
     assert!(error.message.contains("e9"), "{}", error.message);
 }
+
+// HST-045: embeddings.
+
+/// A Mistral embedding reply of `count` embeddings `[i / 10, 0.5]`.
+fn embedding_reply(count: usize, prompt_tokens: u64) -> (u16, Vec<u8>) {
+    let data: Vec<Value> = (0..count)
+        .map(|i| json!({"embedding": [i as f64 / 10.0, 0.5]}))
+        .collect();
+    json_reply(json!({"object": "list", "data": data, "usage": {"prompt_tokens": prompt_tokens}}))
+}
+type Embeddings = Result<suprnova_ai::providers::operations::Item<Vec<Vec<f64>>>, Error>;
+async fn mistral_embed(
+    values: Vec<String>,
+    entry: Option<Value>,
+    replies: Vec<(u16, Vec<u8>)>,
+) -> (Arc<Recorder>, Embeddings) {
+    let transport = Recorder::new(replies);
+    let model = model("mistral", "mistral-embed", transport.clone());
+    let result = suprnova_ai::ops::embed(
+        &model,
+        values,
+        embed_params(entry.map(|value| ("mistral", value))),
+        Default::default(),
+    )
+    .await;
+    (transport, result)
+}
+
+#[tokio::test]
+async fn hst_045_a_mistral_embedding_call_sends_the_body_typescript_sends() {
+    let (transport, result) = mistral_embed(
+        vec!["a".into(), "b".into()],
+        Some(json!({"metadata": {"k": "v"}, "outputDimension": 256, "outputDtype": "int8"})),
+        vec![embedding_reply(2, 7)],
+    )
+    .await;
+    let item = result.unwrap();
+    assert_eq!(item.value, vec![vec![0.0, 0.5], vec![0.1, 0.5]]);
+    assert_eq!(item.usage.as_ref().map(|u| u.input_tokens), Some(7));
+    let request = transport.request();
+    assert_eq!(request.url, "https://api.mistral.ai/v1/embeddings");
+    assert!(
+        request
+            .headers
+            .iter()
+            .any(|(name, value)| name.eq_ignore_ascii_case("authorization")
+                && value == "Bearer sk-test"),
+        "{:?}",
+        request.headers
+    );
+    assert_eq!(
+        transport.body(),
+        json!({"model": "mistral-embed", "input": ["a", "b"], "encoding_format": "float", "metadata": {"k": "v"}, "output_dimension": 256, "output_dtype": "int8"})
+    );
+    // Without the entry, only the three fields go out.
+    let (transport, result) =
+        mistral_embed(vec!["a".into()], None, vec![embedding_reply(1, 1)]).await;
+    result.unwrap();
+    assert_eq!(
+        transport.body(),
+        json!({"model": "mistral-embed", "input": ["a"], "encoding_format": "float"})
+    );
+}
+
+#[tokio::test]
+async fn hst_045_mistral_embeds_32_values_per_call_one_call_at_a_time() {
+    let values: Vec<String> = (0..33).map(|i| format!("v{i}")).collect();
+    let (transport, result) = mistral_embed(
+        values,
+        None,
+        vec![embedding_reply(32, 32), embedding_reply(1, 1)],
+    )
+    .await;
+    let item = result.unwrap();
+    assert_eq!(item.value.len(), 33);
+    let sizes: Vec<usize> = transport
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            serde_json::from_slice::<Value>(&r.body).unwrap()["input"]
+                .as_array()
+                .unwrap()
+                .len()
+        })
+        .collect();
+    assert_eq!(sizes, vec![32, 1]);
+    let model = model(
+        "mistral",
+        "mistral-embed",
+        Recorder::new([embedding_reply(1, 1)]),
+    );
+    let limits = model
+        .provider
+        .default_protocol()
+        .unwrap()
+        .embed_limits(&model);
+    assert_eq!(
+        limits,
+        suprnova_ai::providers::operations::CallLimits {
+            max_per_call: Some(32),
+            parallel: false,
+        }
+    );
+}
+
+#[tokio::test]
+async fn hst_045_invalid_mistral_embedding_entries_fail_before_a_request() {
+    for value in [
+        json!({"outputDimension": 0}),
+        json!({"outputDimension": 2.5}),
+        json!({"outputDimension": -1}),
+        json!({"outputDtype": "fp16"}),
+        json!({"dimensions": 256}),
+        json!({"metadata": "x"}),
+        json!("x"),
+    ] {
+        let (transport, result) = mistral_embed(
+            vec!["a".into()],
+            Some(value.clone()),
+            vec![embedding_reply(1, 1)],
+        )
+        .await;
+        match result {
+            Err(Error::Validation(message)) => {
+                assert!(message.contains("mistral"), "{value}: {message}");
+            }
+            other => panic!("{value}: {:?}", other.err()),
+        }
+        assert_eq!(transport.count(), 0, "{value}");
+    }
+}
