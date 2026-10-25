@@ -31,10 +31,11 @@ use suprnova_ai::{
     types::{
         Event, Message, MessageRole, Part, Tool, ToolChoice, ToolChoiceMode, ToolSelection,
         messages::{
-            ContentOutput, ContentOutputType, ContentPart, FilePart, ReasoningPart,
-            SpecialToolResult, TextPart, ToolCallPart, ToolResultPart, ToolResultValue,
+            BuiltinToolCallPart, BuiltinToolReturnPart, ContentOutput, ContentOutputType,
+            ContentPart, FilePart, ReasoningPart, SpecialToolResult, TextPart, ToolCallPart,
+            ToolResultPart, ToolResultValue,
         },
-        tools::ToolSpec,
+        tools::{ToolConfig, ToolSpec},
     },
     user_message,
 };
@@ -6798,4 +6799,630 @@ async fn hst_042_cached_tokens_come_from_prompt_tokens_details() {
             "{usage}"
         );
     }
+}
+
+// HST-043 and HST-044: the Conversations API.
+
+/// A Conversations stream of these events.
+fn conversation_sse(events: &[Value]) -> (u16, Vec<u8>) {
+    chat_sse(events)
+}
+fn conversation_started() -> Value {
+    json!({"type":"conversation.response.started","conversation_id":"conv_1","created_at":"2026-10-24T00:00:00Z"})
+}
+/// A finished Conversations stream that answers `text`.
+fn conversation_text(text: &str) -> (u16, Vec<u8>) {
+    conversation_sse(&[
+        conversation_started(),
+        json!({"type":"message.output.delta","id":"m1","content_index":0,"model":"mistral-medium-2604","content":text}),
+        json!({"type":"conversation.response.done","usage":{"prompt_tokens":1,"completion_tokens":1}}),
+    ])
+}
+fn conversations_model(model_id: &str, transport: Arc<Recorder>) -> Model {
+    model("mistral", model_id, transport).with_protocol(mistral::conversations())
+}
+/// The one request a Conversations call sends, and its body.
+async fn conversations_request(
+    model_id: &str,
+    messages: Vec<Message>,
+    options: StreamOptions,
+) -> (HttpRequest, Value) {
+    let transport = Recorder::new([conversation_text("{\"value\":1}")]);
+    let model = conversations_model(model_id, transport.clone());
+    let (_, events) = call(&model, messages, options).await;
+    ok(&events);
+    (transport.request(), transport.body())
+}
+async fn conversations_body(
+    model_id: &str,
+    messages: Vec<Message>,
+    options: StreamOptions,
+) -> Value {
+    conversations_request(model_id, messages, options).await.1
+}
+/// The validation message a Conversations call fails with before any request.
+async fn conversations_validation(
+    model_id: &str,
+    messages: Vec<Message>,
+    options: StreamOptions,
+) -> String {
+    let transport = Recorder::new([conversation_text("hi")]);
+    let model = conversations_model(model_id, transport.clone());
+    let (_, events) = call(&model, messages, options).await;
+    let error = events
+        .into_iter()
+        .find_map(Result::err)
+        .expect("the call did not fail");
+    assert_eq!(transport.count(), 0, "a request was sent");
+    match error {
+        Error::Validation(message) => message,
+        other => panic!("{other:?}"),
+    }
+}
+fn builtin_call(id: &str, name: &str, args: &str, metadata: Value) -> Part {
+    Part::BuiltinToolCall(BuiltinToolCallPart {
+        id: format!("b-{id}"),
+        tool_call_id: id.into(),
+        tool_name: name.into(),
+        tool_args: args.into(),
+        provider_metadata: Some([("mistral".to_owned(), metadata)].into()),
+    })
+}
+fn builtin_return(id: &str, name: &str, result: Value) -> Part {
+    Part::BuiltinToolReturn(BuiltinToolReturnPart {
+        id: format!("br-{id}"),
+        tool_call_id: id.into(),
+        tool_name: name.into(),
+        result,
+        is_error: false,
+        provider_metadata: None,
+    })
+}
+fn conversation_tools() -> Vec<Tool> {
+    vec![tools(&["t"]).remove(0), mistral::web_search()]
+}
+
+#[tokio::test]
+async fn hst_043_a_conversations_call_sends_the_body_typescript_sends() {
+    let schema = answer_schema();
+    let history = vec![
+        system_message("S"),
+        user_message("U"),
+        assistant(vec![
+            reasoning_part("R"),
+            text_part("T"),
+            Part::ToolCall(ToolCallPart::new("c1", "t", "{\"a\":1}")),
+        ]),
+        tool_message(ToolResultPart::new("c1", "t", json!({"b": 2}))),
+        assistant(vec![
+            builtin_call(
+                "e1",
+                "web_search",
+                "{\"arguments\":\"q\"}",
+                json!({"type": "tool.execution", "name": "web_search", "function": "web_search"}),
+            ),
+            builtin_return("e1", "web_search", json!({"info": {"result": "r"}})),
+        ]),
+        user_message("V"),
+    ];
+    let mut options = sampling(|s| {
+        s.seed = Some(SeedSamplerParams {
+            seed: ProviderValue::Value(Some(Seed::Value(7))),
+        })
+    });
+    options.params.as_mut().unwrap().output = Some(OutputParams {
+        max_tokens: Some(100),
+        ..Default::default()
+    });
+    let mut options = with_effort(options, Some("low"));
+    options.tools = vec![
+        tools(&["t"]).remove(0).with_strict(true),
+        mistral::web_search(),
+    ];
+    options.output_schema = Some(schema.clone().try_into().unwrap());
+    let (request, body) = conversations_request("mistral-medium-latest", history, options).await;
+    assert_eq!(request.url, "https://api.mistral.ai/v1/conversations");
+    assert!(
+        request
+            .headers
+            .iter()
+            .any(|(name, value)| name.eq_ignore_ascii_case("authorization")
+                && value == "Bearer sk-test"),
+        "{:?}",
+        request.headers
+    );
+    let expected = json!({
+        "model": "mistral-medium-latest",
+        "store": false,
+        "stream": true,
+        "instructions": "S",
+        "inputs": [
+            {"type": "message.input", "role": "user", "content": [{"type": "text", "text": "U"}]},
+            {"type": "message.input", "role": "assistant", "content": [
+                {"type": "thinking", "thinking": [{"type": "text", "text": "R"}], "closed": true},
+                {"type": "text", "text": "T"}
+            ]},
+            {"type": "function.call", "tool_call_id": "c1", "name": "t", "arguments": "{\"a\":1}"},
+            {"type": "function.result", "tool_call_id": "c1", "result": "{\"b\":2}"},
+            {"type": "function.call", "tool_call_id": "e1", "name": "web_search", "arguments": "q"},
+            {"type": "function.result", "tool_call_id": "e1", "result": "r"},
+            {"type": "message.input", "role": "user", "content": [{"type": "text", "text": "V"}]}
+        ],
+        "tools": [
+            {"type": "function", "function": {"name": "t", "description": "A tool", "parameters": {"type": "object", "properties": {"q": {"type": "integer"}}}, "strict": true}},
+            {"type": "web_search"}
+        ],
+        "completion_args": {
+            "max_tokens": 100,
+            "random_seed": 7,
+            "reasoning_effort": "high",
+            "response_format": {"type": "json_schema", "json_schema": {"name": "output", "strict": false, "schema": schema}}
+        }
+    });
+    assert_eq!(body, expected, "{body}");
+}
+
+#[tokio::test]
+async fn hst_043_built_in_calls_are_replayed_from_their_metadata_and_results() {
+    // A call without a function in its metadata goes by the metadata name,
+    // then by the tool's wire name; arguments that are not a JSON object with
+    // an `arguments` string go as given. A return without a string result
+    // goes as the JSON of `info.result`, of `info`, or `null`.
+    let history = vec![
+        user_message("U"),
+        assistant(vec![
+            builtin_call(
+                "e1",
+                "web_search",
+                "{\"arguments\":\"q\"}",
+                json!({"name": "web_search_premium"}),
+            ),
+            builtin_return("e1", "web_search", json!({"info": {"result": {"k": 1}}})),
+            builtin_call("e2", "web_search", "{\"x\":1}", json!({})),
+            builtin_return("e2", "web_search", json!({"info": {"pages": 2}})),
+            builtin_call("e3", "web_search", "", Value::Null),
+            builtin_return("e3", "web_search", json!({})),
+        ]),
+    ];
+    let body = conversations_body(
+        "mistral-medium-latest",
+        history,
+        StreamOptions {
+            tools: vec![mistral::web_search()],
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        body["inputs"],
+        json!([
+            {"type": "message.input", "role": "user", "content": [{"type": "text", "text": "U"}]},
+            {"type": "function.call", "tool_call_id": "e1", "name": "web_search_premium", "arguments": "q"},
+            {"type": "function.result", "tool_call_id": "e1", "result": "{\"k\":1}"},
+            {"type": "function.call", "tool_call_id": "e2", "name": "web_search", "arguments": "{\"x\":1}"},
+            {"type": "function.result", "tool_call_id": "e2", "result": "{\"pages\":2}"},
+            {"type": "function.call", "tool_call_id": "e3", "name": "web_search", "arguments": ""},
+            {"type": "function.result", "tool_call_id": "e3", "result": "null"}
+        ]),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn hst_043_a_named_tool_choice_keeps_the_named_function_or_web_search() {
+    let choose = |name: &str| StreamOptions {
+        tools: conversation_tools(),
+        tool_choice: Some(ToolChoice::Tool(name.into())),
+        ..Default::default()
+    };
+    let body = conversations_body(
+        "mistral-medium-latest",
+        vec![user_message("hi")],
+        choose("web_search"),
+    )
+    .await;
+    assert_eq!(body["tools"], json!([{"type": "web_search"}]), "{body}");
+    assert_eq!(body["completion_args"]["tool_choice"], "any", "{body}");
+    let body = conversations_body(
+        "mistral-medium-latest",
+        vec![user_message("hi")],
+        choose("t"),
+    )
+    .await;
+    assert_eq!(body["tools"].as_array().unwrap().len(), 1, "{body}");
+    assert_eq!(body["tools"][0]["function"]["name"], "t", "{body}");
+    assert_eq!(body["completion_args"]["tool_choice"], "any", "{body}");
+    let body = conversations_body(
+        "mistral-medium-latest",
+        vec![user_message("hi")],
+        StreamOptions {
+            tools: vec![mistral::web_search_premium()],
+            tool_choice: Some(ToolChoice::Required),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        body["tools"],
+        json!([{"type": "web_search_premium"}]),
+        "{body}"
+    );
+    assert_eq!(body["completion_args"]["tool_choice"], "any", "{body}");
+    let body = conversations_body(
+        "mistral-medium-latest",
+        vec![user_message("hi")],
+        StreamOptions {
+            tools: conversation_tools(),
+            tool_choice: Some(ToolChoice::None),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(body["tools"].as_array().unwrap().len(), 2, "{body}");
+    assert_eq!(body["completion_args"]["tool_choice"], "none", "{body}");
+    // Without tools, neither tools nor a tool choice goes out.
+    let body = conversations_body(
+        "mistral-medium-latest",
+        vec![user_message("hi")],
+        Default::default(),
+    )
+    .await;
+    assert!(body.get("tools").is_none(), "{body}");
+    assert!(
+        body["completion_args"].get("tool_choice").is_none(),
+        "{body}"
+    );
+    let message = conversations_validation(
+        "mistral-medium-latest",
+        vec![user_message("hi")],
+        choose("x"),
+    )
+    .await;
+    assert!(message.contains('x'), "{message}");
+}
+
+#[tokio::test]
+async fn hst_043_json_mode_puts_the_instruction_in_the_instructions() {
+    let schema = answer_schema();
+    let instruction = format!(
+        "JSON schema:\n{}\nYou MUST answer with a JSON object that matches the JSON schema above.",
+        serde_json::to_string(&schema).unwrap()
+    );
+    let json_mode =
+        || with_output_schema(mistral_entry(json!({"structuredOutputs": false})), &schema);
+    let body = conversations_body(
+        "mistral-medium-latest",
+        vec![user_message("hi")],
+        json_mode(),
+    )
+    .await;
+    assert_eq!(
+        body["completion_args"]["response_format"],
+        json!({"type": "json_object"}),
+        "{body}"
+    );
+    assert_eq!(body["instructions"], instruction, "{body}");
+    let body = conversations_body(
+        "mistral-medium-latest",
+        vec![
+            system_message("S"),
+            user_message("hi"),
+            system_message("later"),
+        ],
+        json_mode(),
+    )
+    .await;
+    assert_eq!(
+        body["instructions"],
+        format!("S\n\n{instruction}\n\nlater"),
+        "{body}"
+    );
+    // System messages join with a blank line; without one there are no
+    // instructions.
+    let body = conversations_body(
+        "mistral-medium-latest",
+        vec![system_message("A"), user_message("hi"), system_message("B")],
+        Default::default(),
+    )
+    .await;
+    assert_eq!(body["instructions"], "A\n\nB", "{body}");
+    let body = conversations_body(
+        "mistral-medium-latest",
+        vec![user_message("hi")],
+        Default::default(),
+    )
+    .await;
+    assert!(body.get("instructions").is_none(), "{body}");
+    assert!(
+        body["completion_args"].get("response_format").is_none(),
+        "{body}"
+    );
+    let body = conversations_body(
+        "mistral-medium-latest",
+        vec![user_message("hi")],
+        with_output_schema(mistral_entry(json!({"strictJsonSchema": true})), &schema),
+    )
+    .await;
+    assert_eq!(
+        body["completion_args"]["response_format"]["json_schema"]["strict"], true,
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn hst_043_the_conversations_api_refuses_what_it_does_not_take() {
+    // Reasoning settings on a model the API does not reason on.
+    for options in [
+        effort(Some("low")),
+        effort(None),
+        mistral_entry(json!({"reasoningEffort": "high"})),
+    ] {
+        let message =
+            conversations_validation("mistral-large-latest", vec![user_message("hi")], options)
+                .await;
+        assert!(message.contains("mistral-large-latest"), "{message}");
+    }
+    // The chat-only options of the `mistral` entry.
+    for (key, value) in [
+        ("safePrompt", json!(true)),
+        ("documentImageLimit", json!(4)),
+        ("documentPageLimit", json!(16)),
+        ("promptCacheKey", json!("k")),
+        ("parallelToolCalls", json!(false)),
+    ] {
+        let message = conversations_validation(
+            "mistral-medium-latest",
+            vec![user_message("hi")],
+            mistral_entry(json!({key: value})),
+        )
+        .await;
+        assert!(message.contains(key), "{key}: {message}");
+    }
+    // A core cache key, parallel tool calls and a setting HST-008 names.
+    let cache = params(|p| {
+        p.cache = Some(CacheParams {
+            key: Some("k1".into()),
+            ..Default::default()
+        })
+    });
+    let message =
+        conversations_validation("mistral-medium-latest", vec![user_message("hi")], cache).await;
+    assert!(message.contains("cache key"), "{message}");
+    let mut parallel = params(|p| {
+        p.tool_calling = Some(ToolCallingParams {
+            tool_choice: ToolChoice::Auto,
+            parallel_tool_calls: ProviderValue::Value(false),
+            max_tool_calls: ProviderValue::Default,
+        })
+    });
+    parallel.tools = tools(&["t"]);
+    let message =
+        conversations_validation("mistral-medium-latest", vec![user_message("hi")], parallel).await;
+    assert!(message.contains("parallel tool calls"), "{message}");
+    let identifier = params(|p| p.safety_identifier = Some("user-1".into()));
+    let message = conversations_validation(
+        "mistral-medium-latest",
+        vec![user_message("hi")],
+        identifier,
+    )
+    .await;
+    assert!(message.contains("safety identifier"), "{message}");
+    // Another provider's tool.
+    let search = Tool::provider(
+        "search",
+        ToolConfig {
+            id: Some("anthropic.web_search_20250305".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let message = conversations_validation(
+        "mistral-medium-latest",
+        vec![user_message("hi")],
+        StreamOptions {
+            tools: vec![search],
+            ..Default::default()
+        },
+    )
+    .await;
+    assert!(
+        message.contains("anthropic.web_search_20250305"),
+        "{message}"
+    );
+}
+
+#[tokio::test]
+async fn hst_043_a_snapshot_of_a_conversations_model_restores_its_protocol() {
+    let transport = Recorder::new([conversation_text("hi")]);
+    let registry = registry(host("mistral"), key_config(), transport.clone());
+    let model = Model::new(
+        "mistral-medium-latest",
+        registry.get_provider("mistral").unwrap(),
+    )
+    .with_protocol(mistral::conversations());
+    let snapshot = model.to_value().unwrap();
+    assert!(!snapshot.to_string().contains("sk-test"), "{snapshot}");
+    let restored = Model::from_value(snapshot, &registry).unwrap();
+    let (_, events) = call(&restored, vec![user_message("hello")], Default::default()).await;
+    ok(&events);
+    assert_eq!(
+        transport.request().url,
+        "https://api.mistral.ai/v1/conversations"
+    );
+}
+
+#[tokio::test]
+async fn hst_044_a_conversations_stream_is_read_as_typescript_reads_it() {
+    let transport = Recorder::new([conversation_sse(&[
+        conversation_started(),
+        json!({"type":"message.output.delta","id":"m1","content_index":0,"model":"mistral-medium-2604","content":{"type":"thinking","thinking":[{"type":"text","text":"A"}]}}),
+        json!({"type":"message.output.delta","id":"m1","content_index":1,"content":{"type":"text","text":"B"}}),
+        json!({"type":"tool.execution.started","id":"e1","name":"web_search","arguments":"{\"q"}),
+        json!({"type":"tool.execution.delta","id":"e1","name":"web_search","arguments":"\":1}"}),
+        json!({"type":"tool.execution.done","id":"e1","name":"web_search","function":"web_search","info":{"result":"r"}}),
+        json!({"type":"message.output.delta","id":"m2","content_index":0,"content":{"type":"tool_reference","tool":"web_search","title":"A","url":"https://a.test"}}),
+        json!({"type":"message.output.delta","id":"m2","content_index":0,"content":{"type":"tool_reference","tool":"web_search","url":"https://a.test"}}),
+        json!({"type":"message.output.delta","id":"m2","content_index":0,"content":"C"}),
+        json!({"type":"function.call.delta","tool_call_id":"c1","name":"t","arguments":"{}","output_index":0}),
+        json!({"type":"conversation.response.done","usage":{"prompt_tokens":12,"completion_tokens":5,"num_cached_tokens":3}}),
+    ])]);
+    let model = conversations_model("mistral-medium-latest", transport);
+    let options = StreamOptions {
+        tools: conversation_tools(),
+        ..Default::default()
+    };
+    let (handle, events) = call(&model, vec![user_message("hello")], options).await;
+    ok(&events);
+    let mut log: Vec<String> = Vec::new();
+    let mut open: Option<String> = None;
+    for event in events.iter().flatten() {
+        match event {
+            Event::ReasoningStart(start) => {
+                assert!(open.is_none(), "a block was still open: {open:?}");
+                open = Some(start.block_id.clone());
+                log.push("reasoning:".into());
+            }
+            Event::TextStart(start) => {
+                assert!(open.is_none(), "a block was still open: {open:?}");
+                open = Some(start.block_id.clone());
+                log.push("text:".into());
+            }
+            Event::ReasoningDelta(delta) => log.last_mut().unwrap().push_str(&delta.chunk),
+            Event::TextDelta(delta) => log.last_mut().unwrap().push_str(&delta.chunk),
+            Event::ReasoningEnd(end) => {
+                assert_eq!(open.take().as_deref(), Some(end.block_id.as_str()));
+            }
+            Event::TextEnd(end) => {
+                assert_eq!(open.take().as_deref(), Some(end.block_id.as_str()));
+            }
+            Event::BuiltinToolEnd(end) => {
+                assert!(open.is_none(), "a block was still open: {open:?}");
+                let call = &end.tool_call;
+                log.push(format!(
+                    "builtin:{}:{}:{}",
+                    call.tool_call_id, call.tool_name, call.tool_args
+                ));
+                assert_eq!(
+                    call.provider_metadata.as_ref().unwrap()["mistral"],
+                    json!({"type": "tool.execution", "name": "web_search", "function": "web_search"})
+                );
+            }
+            Event::BuiltinToolResult(result) => {
+                let part = &result.result;
+                log.push(format!(
+                    "result:{}:{}:{}",
+                    part.tool_call_id, part.tool_name, part.result
+                ));
+            }
+            Event::ToolEnd(end) => {
+                let call = &end.tool_call;
+                log.push(format!(
+                    "call:{}:{}:{}",
+                    call.tool_call_id, call.tool_name, call.tool_args
+                ));
+            }
+            _ => {}
+        }
+    }
+    let args = json!({"arguments": "{\"q\":1}"}).to_string();
+    assert_eq!(
+        log,
+        [
+            "reasoning:A".to_owned(),
+            "text:B".to_owned(),
+            format!("builtin:e1:web_search:{args}"),
+            "result:e1:web_search:{\"info\":{\"result\":\"r\"}}".to_owned(),
+            "text:C".to_owned(),
+            "call:c1:t:{}".to_owned(),
+        ]
+    );
+    assert_eq!(handle.finish_reason(), Some("tool_call"));
+    assert_eq!(handle.response_id(), Some("conv_1"));
+    assert_eq!(handle.response_model(), Some("mistral-medium-2604"));
+    let usage = handle.usage().unwrap();
+    assert_eq!(
+        (
+            usage.input_tokens,
+            usage.output_tokens,
+            usage.cache_read_tokens
+        ),
+        (12, 5, Some(3))
+    );
+    let sources = handle.message().provider_metadata.as_ref().unwrap()["mistral"]["sources"]
+        .as_array()
+        .cloned()
+        .unwrap();
+    assert_eq!(sources.len(), 1, "{sources:?}");
+    assert_eq!(sources[0]["sourceType"], "url");
+    assert_eq!(sources[0]["url"], "https://a.test");
+    assert_eq!(sources[0]["title"], "A");
+    assert!(
+        sources[0]["id"].as_str().is_some_and(|id| !id.is_empty()),
+        "{sources:?}"
+    );
+}
+
+#[tokio::test]
+async fn hst_044_an_unfinished_stream_and_stream_errors_are_reported() {
+    // A stream that ends without `conversation.response.done`, or with an
+    // execution still open, finishes with `error`.
+    for events in [
+        vec![
+            conversation_started(),
+            json!({"type":"message.output.delta","id":"m1","content":"A"}),
+        ],
+        vec![
+            conversation_started(),
+            json!({"type":"tool.execution.started","id":"e1","name":"web_search","arguments":"{}"}),
+            json!({"type":"conversation.response.done","usage":{"prompt_tokens":1,"completion_tokens":1}}),
+        ],
+    ] {
+        let transport = Recorder::new([conversation_sse(&events)]);
+        let model = conversations_model("mistral-medium-latest", transport);
+        let options = StreamOptions {
+            tools: vec![mistral::web_search()],
+            ..Default::default()
+        };
+        let (handle, events) = call(&model, vec![user_message("hello")], options).await;
+        ok(&events);
+        assert_eq!(handle.finish_reason(), Some("error"));
+    }
+    // A finished stream of text alone stops, with zero usage when none came.
+    let transport = Recorder::new([conversation_sse(&[
+        conversation_started(),
+        json!({"type":"message.output.delta","id":"m1","content":"A"}),
+        json!({"type":"conversation.response.done","usage":{}}),
+    ])]);
+    let model = conversations_model("mistral-medium-latest", transport);
+    let (handle, events) = call(&model, vec![user_message("hello")], Default::default()).await;
+    ok(&events);
+    assert_eq!(handle.finish_reason(), Some("stop"));
+    assert_eq!(handle.message().text(), "A");
+    let usage = handle.usage().unwrap();
+    assert_eq!((usage.input_tokens, usage.output_tokens), (0, 0));
+    // An error event ends the call with a classified provider error.
+    let transport = Recorder::new([conversation_sse(&[
+        conversation_started(),
+        json!({"type":"conversation.response.error","message":"m","code":429}),
+    ])]);
+    let model = conversations_model("mistral-medium-latest", transport);
+    let (_, events) = call(&model, vec![user_message("hello")], Default::default()).await;
+    let Some(Error::Provider(error)) = events.into_iter().find_map(Result::err) else {
+        panic!("the error event did not end the call with a provider error");
+    };
+    assert_eq!(error.kind, ProviderErrorKind::RateLimit, "{error:?}");
+    assert_eq!(error.message, "m");
+    assert_eq!(error.code.as_deref(), Some("429"));
+    // An execution that ends without a start is a response error.
+    let transport = Recorder::new([conversation_sse(&[
+        conversation_started(),
+        json!({"type":"tool.execution.done","id":"e9","name":"web_search"}),
+    ])]);
+    let model = conversations_model("mistral-medium-latest", transport);
+    let (_, events) = call(&model, vec![user_message("hello")], Default::default()).await;
+    let Some(Error::Provider(error)) = events.into_iter().find_map(Result::err) else {
+        panic!("the stray execution did not end the call with a provider error");
+    };
+    assert_eq!(error.kind, ProviderErrorKind::Response, "{error:?}");
+    assert!(error.message.contains("e9"), "{}", error.message);
 }
