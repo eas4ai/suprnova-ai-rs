@@ -120,7 +120,7 @@ fn data_url(input: &MediaInput) -> String {
     }
 }
 
-fn warning(kind: &str, feature: Option<&str>, message: &str) -> Warning {
+pub(super) fn warning(kind: &str, feature: Option<&str>, message: &str) -> Warning {
     let (details, message) = match feature {
         Some(_) => (Some(message.to_owned()), None),
         None => (None, Some(message.to_owned())),
