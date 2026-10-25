@@ -211,6 +211,19 @@ These follow `docs/spec/models.md`, `docs/spec/agents.md`, `docs/spec/hosts.md`,
   one; and a MiniMax job is its `task_id` alone, so a status checked from a
   stored `VideoJob` through `ops::video_status` completes without the
   `resolvedInputs` that `ops::generate_video` merges from the start.
+  Mistral brings every model kind of its package too: the `mistral` chat
+  options, the Conversations API as a second protocol
+  (`hosts::mistral::conversations()`) with its web search tools and the
+  cited pages as `sources` in the final `mistral` metadata, embeddings,
+  speech and transcription. Departures: the Conversations API fails with
+  `Error::Validation` on the chat-only options, a core cache key or
+  parallel tool calls, another provider's tool and a reasoning setting for
+  a model it does not reason on, where TypeScript warns; the `mistral`
+  entries refuse an option name their schemas do not take, where TypeScript
+  strips it; a `conversation.response.error` event or a `tool.execution.done`
+  without a start ends the call, where TypeScript continues the stream with
+  an error part; the function calls of a Conversations stream end when the
+  stream does; and no live Mistral call has checked the port.
 - Chat Completions tool call deltas without an index, as Mistral and Moonshot
   AI send them, are told apart by their place in the chunk and their id; Python
   merges them. Text that follows reasoning, or reasoning that follows text,
@@ -395,7 +408,7 @@ rules follow the source.
 | `docs/spec/operations.md` (no Python source) | `tests/spec_operations.rs` | OPS-001 to OPS-014: front-end pass-through and retries, embedding runs, image and video batches, video jobs, uploads, batches, streaming transcription and translation, realtime connections, the WebSocket transport, the evaluation adapter, file info, downloads and deletes, skill uploads, and server and WebRTC realtime sessions |
 | `docs/spec/openai.md` (no Python source) | `tests/spec_openai.rs` | OAI-001 to OAI-027: Responses history under every `store` setting, reasoning models, endpoints, headers and errors, Responses and Chat Completions options, model-dependent settings, includes, files, tools, application-run tools, stream items, usage, Completions, embeddings, images, speech, transcription and its streaming form, translation, files, skills, batches, realtime and Live sessions, decisions, prompt caching and JSON schema normalization |
 | `docs/spec/anthropic.md` (no Python source) | `tests/spec_anthropic.rs` | ANT-001 to ANT-020: endpoints, auth token and betas, provider options, core parameters and reasoning, model capabilities and their logged changes, structured output, tools and tool names, application-run and Anthropic-run tools and their history, files, system messages, assistant history, the stream reader, usage and final metadata, prompt caching, the shared hosts, file and skill uploads, batches and evaluation |
-| `docs/spec/hosts.md` (no Python source) | `tests/spec_hosts.rs` | HST-001 to HST-041: host endpoints and keys, usage requests, field rules, Z.ai limits, error bodies, usage and JSON-mode fixes, MiniMax effort, the DeepSeek, Moonshot AI and Mistral dialects, tool calls without an index, stream error kinds, the xAI and Hugging Face Responses rules, Responses errors and terminal events, the options, completions, embeddings, images and reranking of Together AI, DeepInfra and Fireworks, DeepSeek's options, message names, prefix, strict tools, images, final metadata and file uploads, and MiniMax's own entry, 3.1 media blocks and video jobs |
+| `docs/spec/hosts.md` (no Python source) | `tests/spec_hosts.rs` | HST-001 to HST-047: host endpoints and keys, usage requests, field rules, Z.ai limits, error bodies, usage and JSON-mode fixes, MiniMax effort, the DeepSeek, Moonshot AI and Mistral dialects, tool calls without an index, stream error kinds, the xAI and Hugging Face Responses rules, Responses errors and terminal events, the options, completions, embeddings, images and reranking of Together AI, DeepInfra and Fireworks, DeepSeek's options, message names, prefix, strict tools, images, final metadata and file uploads, MiniMax's own entry, 3.1 media blocks and video jobs, and Mistral's chat options, Conversations API, embeddings, speech and transcription |
 
 Tests combine related Python parameter cases into Rust table-driven tests. They do
 not reproduce Python test counts. Python garbage-collector closure behavior,

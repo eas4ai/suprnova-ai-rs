@@ -41,6 +41,11 @@
 //! `ops::upload_file` uploads images to its files API (HST-037). MiniMax
 //! reads its `minimax` entry and 3.1's media blocks (HST-038, HST-039), and
 //! `ops::generate_video` runs its video models as jobs (HST-040, HST-041).
+//! Mistral reads its `mistral` entry (HST-042); `mistral::conversations()`
+//! gives its Conversations API, with `mistral::web_search()` and
+//! `mistral::web_search_premium()` (HST-043, HST-044); and `ops::embed`,
+//! `ops::generate_audio` and `ops::transcribe` work with its models (HST-045
+//! to HST-047).
 //! `list_models` and `probe` return `Error::UnsupportedOperation` for every
 //! host.
 use crate::{

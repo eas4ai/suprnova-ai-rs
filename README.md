@@ -180,6 +180,26 @@ a Kontext result on another server, through the provider's download
 transport: register them with `register_with_downloads`, or build one with
 `provider(...).with_download_transport(...)`. A Fireworks Kontext call
 without a download transport fails before its job starts.
+Mistral is ported whole too. A chat call reads the `mistral` entry
+(`safePrompt`, `documentImageLimit`, `documentPageLimit`, `promptCacheKey`,
+`parallelToolCalls`, `reasoningEffort`, `structuredOutputs` and
+`strictJsonSchema`) over the core settings it names; with `structuredOutputs:
+false` an output schema goes as JSON mode with the schema instruction in the
+first system message. Set `hosts::mistral::conversations()` with
+`Model::with_protocol` for the Conversations API: it takes the same models
+and Mistral's web search tools, `mistral::web_search()` and
+`mistral::web_search_premium()`, whose calls and results come back as
+built-in tool parts with the cited pages as `sources` in the final message's
+`mistral` metadata. It takes no `safePrompt`, document limits,
+`promptCacheKey` or parallel tool calls, and reasons only on the models its
+package lists; such a setting fails with `Error::Validation`. `ops::embed`
+(32 values per call, one call at a time, with `metadata`, `outputDimension`
+and `outputDtype`), `ops::generate_audio` (`refAudio`, `expressiveness` and
+`phonemeHints`; mp3, wav, pcm, flac or opus, with TypeScript's warnings in
+`Item.warnings`) and `ops::transcribe` (`language`, `returnLanguage`,
+`temperature`, `timestampGranularities`, `diarize` and `contextBias`) work
+with Mistral's models. No live Mistral call has checked this port: every
+check runs against recorded requests.
 Hosts do not support `list_models` or `probe`.
 
 `providers::google` is the Gemini API and `providers::google_vertex` is Vertex
